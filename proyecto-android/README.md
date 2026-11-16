@@ -79,3 +79,7 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
   la lista de lo que queda en ⋮ › Programación de este canal.
 - Los canales son directos: no se guarda posición. Los que declaran DRM (`#KODIPROP` con licencia) se marcan con 🔒 y probablemente no se reproduzcan.
 - Se permite tráfico http sin cifrar (listas, guías y logos suelen estar así).
+
+## 0.4.1
+
+- Corrige un error de compilación en el panel de canales (`btnFav` usado en su propio inicializador).
