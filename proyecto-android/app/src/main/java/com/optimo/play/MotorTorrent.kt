@@ -279,6 +279,76 @@ class MotorTorrent(private val ctx: Context) {
         }
     }
 
+    private var cacheT = 0L
+    private var cacheProg = 0
+    private var cacheDescargado = 0L
+    private var cacheAdelante = 0L
+
+    private fun entero(o: Any, metodo: String): Int = try {
+        (o.javaClass.getMethod(metodo).invoke(o) as Number).toInt()
+    } catch (e: Exception) {
+        -1
+    }
+
+    private fun velTxt(bytesPorSeg: Int): String =
+        if (bytesPorSeg >= 1024 * 1024) "%.1f MB/s".format(bytesPorSeg / 1048576.0) else "${bytesPorSeg / 1024} KB/s"
+
+    /** Cuenta piezas del archivo que ya están (cada 2 s: son llamadas nativas) y cuántas hay seguidas por delante. */
+    private fun recalcular(h: TorrentHandle, ti: TorrentInfo, a: ArchivoTorrent, frac: Double) {
+        val pl = ti.pieceLength().toLong()
+        val p0 = (a.offset / pl).toInt()
+        val p1 = ((a.offset + a.tam - 1) / pl).toInt()
+        var tengo = 0
+        for (p in p0..p1) if (h.havePiece(p)) tengo++
+        val total = p1 - p0 + 1
+        cacheProg = if (total > 0) tengo * 100 / total else 0
+        cacheDescargado = minOf(tengo.toLong() * pl, a.tam)
+        val posByte = (frac.coerceIn(0.0, 1.0) * a.tam).toLong()
+        var q = ((a.offset + posByte) / pl).toInt().coerceIn(p0, p1)
+        var n = 0
+        while (q <= p1 && h.havePiece(q)) {
+            n++
+            q++
+        }
+        cacheAdelante = minOf(n * pl, a.tam - posByte).coerceAtLeast(0L)
+    }
+
+    /**
+     * Panel de estado: velocidad, progreso del ARCHIVO que suena, peers y cuánto buffer hay por delante.
+     * `frac` es la posición de reproducción (0..1) y `durMs` la duración, para estimar los segundos de buffer.
+     */
+    fun estadisticasDetalle(frac: Double, durMs: Long): String {
+        val h = th ?: return ""
+        val ti = info ?: return ""
+        val a = archivo ?: return ""
+        return try {
+            if (!h.isValid) return ""
+            val st = h.status()
+            val ahora = System.currentTimeMillis()
+            if (ahora - cacheT > 2000) {
+                recalcular(h, ti, a, frac)
+                cacheT = ahora
+            }
+            val sb = StringBuilder()
+            sb.append("↓ ").append(velTxt(st.downloadRate()))
+            val subida = entero(st, "uploadRate")
+            if (subida >= 0) sb.append("   ↑ ").append(velTxt(subida))
+            sb.append("\n").append(cacheProg).append(" % · ").append(Utiles.tam(cacheDescargado))
+                .append(" / ").append(Utiles.tam(a.tam))
+            sb.append("\n").append(st.numPeers()).append(" peers")
+            val semillas = entero(st, "numSeeds")
+            if (semillas >= 0) sb.append(" (").append(semillas).append(" semillas)")
+            if (durMs > 0 && a.tam > 0) {
+                val bytesPorSeg = a.tam.toDouble() / (durMs / 1000.0)
+                val seg = (cacheAdelante / bytesPorSeg).toLong()
+                sb.append(" · buffer ").append(Utiles.fmt(seg * 1000))
+            }
+            sb.toString()
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
     /** Estadísticas cortas para mostrar mientras se reproduce. */
     fun estadisticas(): String {
         val h = th ?: return ""
