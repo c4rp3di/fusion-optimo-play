@@ -64,3 +64,18 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - **Espacio:** mientras se guarda, cada archivo ocupa el doble (descarga temporal en la caché + copia final), y se avisa si no hay sitio.
   Lo descargado en la caché se sigue borrando al cerrar; lo guardado en Descargas queda.
 - Solo un torrent a la vez.
+
+## 0.4.0 — Listas de canales M3U y guía de programación
+
+- **Listas .m3u / .m3u8:** al abrir una URL o archivo con esa extensión se lee y se decide por el contenido: si son canales (varias entradas `#EXTINF`
+  sin etiquetas HLS) se abre el **panel de canales**; si es un solo vídeo HLS, se reproduce como siempre.
+- **Panel de canales (☰):** agrupado por `group-title`, con logo, buscador (nombre, número o grupo), ★ favoritos y filtro de favoritos.
+  Si casi todos los nombres empiezan por un número («100 LG 1») se separa como número de canal y se ordena por él.
+  ⏮ / ⏭ cambian de canal (dando la vuelta al llegar al final).
+- **Marcas de la lista:** las direcciones con `[UA]`, `[DEVICE_ID]`, `[LMT]`… se rellenan: publicidad personalizada limitada (`LMT=1`, `DNS=1`),
+  un identificador aleatorio por sesión (nunca el real) y vacío lo que no se conoce.
+- **Guía (EPG):** si la cabecera trae `url-tvg`/`x-tvg-url` se descarga sola (XMLTV, .xml o .xml.gz, caché de 6 h); si no, se puede poner a mano en
+  *Guía* (panel de canales) o en ⋮. Se enlaza por `tvg-id` y, si falta, por nombre. Muestra «Ahora» en cada canal, el programa en la barra superior y
+  la lista de lo que queda en ⋮ › Programación de este canal.
+- Los canales son directos: no se guarda posición. Los que declaran DRM (`#KODIPROP` con licencia) se marcan con 🔒 y probablemente no se reproduzcan.
+- Se permite tráfico http sin cifrar (listas, guías y logos suelen estar así).
