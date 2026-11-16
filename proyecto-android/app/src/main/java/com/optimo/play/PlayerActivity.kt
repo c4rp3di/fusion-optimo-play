@@ -80,6 +80,9 @@ class PlayerActivity : Activity() {
     private lateinit var btnAnt: TextView
     private lateinit var btnSig: TextView
     private lateinit var btnLista: TextView
+    private lateinit var panelCan: PanelCanales
+    private var panelCanAbierto = false
+    private var canalesAuto = false
     private var panelAbierto = false
     private var panelAuto = false
     private var conservarAlSalir = false
@@ -186,7 +189,7 @@ class PlayerActivity : Activity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        if (panelAbierto) cerrarPanel() else salir()
+        if (panelCanAbierto) cerrarPanelCanales() else if (panelAbierto) cerrarPanel() else salir()
     }
 
     override fun onStart() {
@@ -373,6 +376,7 @@ class PlayerActivity : Activity() {
 
         construirSync()
         construirPanel()
+        construirPanelCanales()
 
         // Gestos sobre el vídeo: un toque muestra/oculta controles, doble toque salta, deslizar = brillo / volumen.
         val gestos = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
@@ -449,7 +453,116 @@ class PlayerActivity : Activity() {
     }
 
     private fun alternarPanel() {
-        if (panelAbierto) cerrarPanel() else abrirPanel()
+        if (svc?.hayCanales == true) {
+            if (panelCanAbierto) cerrarPanelCanales() else abrirPanelCanales()
+        } else {
+            if (panelAbierto) cerrarPanel() else abrirPanel()
+        }
+    }
+
+    // ---------------------------------------------------------------- canales (lista M3U) y guía
+
+    private fun construirPanelCanales() {
+        panelCan = PanelCanales(
+            this,
+            { i ->
+                svc?.elegirCanal(i)
+                cerrarPanelCanales()
+            },
+            { c -> alternarFavorito(c) },
+            { dialogoGuia() },
+            { cerrarPanelCanales() }
+        )
+        panelCan.vista.visibility = View.GONE
+        val ancho = minOf((resources.displayMetrics.widthPixels * 0.85f).toInt(), dp(440))
+        raiz.addView(panelCan.vista, FrameLayout.LayoutParams(ancho, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END))
+    }
+
+    private fun abrirPanelCanales() {
+        val s = svc ?: return
+        if (!s.hayCanales) return
+        panelCan.cargar(s.canales, aj.favoritos, s.guia, s.canalActual)
+        panelCan.vista.visibility = View.VISIBLE
+        panelCanAbierto = true
+        mostrarCapa()
+    }
+
+    private fun cerrarPanelCanales() {
+        panelCan.vista.visibility = View.GONE
+        panelCanAbierto = false
+    }
+
+    private fun alternarFavorito(c: Canal) {
+        aj.alternarFavorito(c.clave)
+        val s = svc ?: return
+        panelCan.actualizar(aj.favoritos, s.guia, s.canalActual)
+    }
+
+    /** Estado de la guía y campo para poner a mano su dirección (XMLTV, .xml o .xml.gz). */
+    private fun dialogoGuia() {
+        val s = svc ?: return
+        val caja = LinearLayout(this)
+        caja.orientation = LinearLayout.VERTICAL
+        caja.setPadding(dp(20), dp(8), dp(20), dp(0))
+        val estado = TextView(this)
+        val anuncia = s.guiaDeLaLista()
+        estado.text = (if (s.estadoGuia.isEmpty()) "Sin guía cargada." else s.estadoGuia) +
+            (if (anuncia != null) "\n\nLa lista anuncia: " + anuncia else "")
+        caja.addView(estado)
+        val campo = EditText(this)
+        campo.hint = "https://…/guia.xml  o  .xml.gz"
+        campo.isSingleLine = true
+        campo.setText(aj.guiaDe(s.fuente?.uri ?: ""))
+        caja.addView(campo)
+        AlertDialog.Builder(this)
+            .setTitle("Guía de programación")
+            .setView(caja)
+            .setPositiveButton("Cargar") { _, _ ->
+                s.fijarGuiaManual(campo.text.toString())
+                aviso("Cargando la guía…")
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Lo que queda por emitir en el canal que suena, según la guía. */
+    private fun dialogoProgramacion() {
+        val s = svc ?: return
+        val c = s.canalActivo
+        if (c == null) {
+            aviso("Elige un canal")
+            return
+        }
+        val g = s.guia
+        if (g == null) {
+            AlertDialog.Builder(this)
+                .setTitle(c.nombre)
+                .setMessage(if (s.estadoGuia.isEmpty()) "Sin guía cargada." else s.estadoGuia)
+                .setPositiveButton("Configurar guía") { _, _ -> dialogoGuia() }
+                .setNegativeButton("Cerrar", null)
+                .show()
+            return
+        }
+        val ps = g.pendientes(c)
+        if (ps.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle(c.nombre)
+                .setMessage("La guía no tiene programación para este canal. Puede que su identificador no coincida con el de la lista.")
+                .setNegativeButton("Cerrar", null)
+                .show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(c.nombre)
+            .setItems(ps.map { Utiles.hora(it.inicio) + "–" + Utiles.hora(it.fin) + "  " + it.titulo }.toTypedArray()) { _, i ->
+                val p = ps[i]
+                AlertDialog.Builder(this)
+                    .setTitle(p.titulo)
+                    .setMessage(Utiles.hora(p.inicio) + " – " + Utiles.hora(p.fin) + "\n\n" + (if (p.desc.isEmpty()) "(sin descripción)" else p.desc))
+                    .setPositiveButton("Cerrar", null)
+                    .show()
+            }
+            .show()
     }
 
     private fun abrirPanel() {
@@ -787,11 +900,18 @@ class PlayerActivity : Activity() {
             if (!arrastrando) {
                 seekBar.max = if (len > 0) len.toInt() else 1
                 seekBar.progress = t.toInt().coerceAtLeast(0)
-                tiempoTv.text = Utiles.fmt(t) + " / " + (if (len > 0) Utiles.fmt(len) else "--")
+                tiempoTv.text = if (s.hayCanales && len <= 0) "● EN DIRECTO" else Utiles.fmt(t) + " / " + (if (len > 0) Utiles.fmt(len) else "--")
             }
             btnPlay.text = if (m.isPlaying) "❚❚" else "▶"
         }
-        tituloTv.text = s.titulo
+        var tit = s.titulo
+        val canalAct = s.canalActivo
+        val gu = s.guia
+        if (canalAct != null && gu != null) {
+            val ahoraProg = gu.ahora(canalAct)
+            if (ahoraProg != null) tit += "  ·  " + ahoraProg.titulo
+        }
+        tituloTv.text = tit
 
         if (aj.mostrarStats && s.esTorrent && m != null && s.error == null && s.estado.isEmpty()) {
             val len2 = try { m.length } catch (e: Throwable) { 0L }
@@ -823,7 +943,21 @@ class PlayerActivity : Activity() {
         val conLista = s.hayLista
         btnAnt.visibility = if (conLista) View.VISIBLE else View.GONE
         btnSig.visibility = if (conLista) View.VISIBLE else View.GONE
-        btnLista.visibility = if (s.esTorrent && s.archivosTorrent.isNotEmpty()) View.VISIBLE else View.GONE
+        btnLista.visibility =
+            if ((s.esTorrent && s.archivosTorrent.isNotEmpty()) || s.hayCanales) View.VISIBLE else View.GONE
+
+        // Lista de canales: el panel se abre solo al cargarla, hasta que se elija uno.
+        if (s.hayCanales) {
+            if (s.necesitaElegirCanal) {
+                if (!canalesAuto) {
+                    canalesAuto = true
+                    abrirPanelCanales()
+                }
+            } else {
+                canalesAuto = false
+            }
+            if (panelCanAbierto) panelCan.actualizar(aj.favoritos, s.guia, s.canalActual)
+        }
 
         // El panel de archivos se abre solo cuando hay que elegir, o al volver con descargas en curso sin reproducir.
         val debeElegir = s.necesitaElegir || (s.mp == null && s.hayGuardadoPendiente() && s.archivosTorrent.isNotEmpty())
@@ -858,6 +992,11 @@ class PlayerActivity : Activity() {
         val etiquetas = ArrayList<String>()
         val acciones = ArrayList<() -> Unit>()
         etiquetas.add("Información"); acciones.add { Informacion.mostrar(this, s) }
+        if (s.hayCanales) {
+            etiquetas.add("Canales"); acciones.add { abrirPanelCanales() }
+            etiquetas.add("Programación de este canal"); acciones.add { dialogoProgramacion() }
+            etiquetas.add("Guía de programación…"); acciones.add { dialogoGuia() }
+        }
         etiquetas.add("Velocidad"); acciones.add { menuVelocidad() }
         etiquetas.add("Decodificación de vídeo"); acciones.add { menuDecodificacion() }
         if (s.esTorrent) {
