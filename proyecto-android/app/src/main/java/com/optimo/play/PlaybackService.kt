@@ -95,7 +95,14 @@ class PlaybackService : Service() {
     private var inicioHecho = false
     private var hiloTorrent: Thread? = null
     private val subsExternas = ArrayList<File>()
-    private var archivoTorrentActual: ArchivoTorrent? = null
+    @Volatile var archivoTorrentActual: ArchivoTorrent? = null
+        private set
+    @Volatile private var objetivoTorrent: ArchivoTorrent? = null
+    private var memoOrigen: List<ArchivoTorrent>? = null
+    private var memoLista: List<ArchivoTorrent> = emptyList()
+    private val candadoGuardado = Any()
+    private var hiloGuardado: Thread? = null
+    private var genGuardado = -1
 
     // ---- bloqueos del sistema
     private var wake: PowerManager.WakeLock? = null
@@ -119,6 +126,8 @@ class PlaybackService : Service() {
             override fun onPause() { mp?.pause() }
             override fun onStop() { detener() }
             override fun onSeekTo(pos: Long) { mp?.setTime(pos) }
+            override fun onSkipToNext() { siguiente() }
+            override fun onSkipToPrevious() { anterior() }
             override fun onFastForward() { saltar(10_000) }
             override fun onRewind() { saltar(-10_000) }
         }, main)
@@ -176,11 +185,12 @@ class PlaybackService : Service() {
     fun abrir(f: Fuente) {
         guardarPos()
         hiloTorrent?.interrupt()
-        motor.cancelado = true
+        motor.cerrar()
         error = null
         fin = false
         estado = ""
         ultimoEvento = ""
+        objetivoTorrent = null
         necesitaElegir = false
         archivosTorrent = emptyList()
         subsExternas.clear()
@@ -306,11 +316,11 @@ class PlaybackService : Service() {
                 if (!f.uri.startsWith("magnet:", true)) archivoT = copiarTorrent(f.uri)
                 val lista = motor.abrir(f.uri, archivoT) { s -> estado = s }
                 archivosTorrent = lista
-                val videos = lista.filter { it.esVideo }
+                val rep = listaReproducible()
                 when {
-                    videos.size == 1 -> prepararArchivo(videos[0])
-                    videos.isEmpty() && lista.isNotEmpty() -> prepararArchivo(lista.maxByOrNull { it.tam }!!)
-                    videos.size > 1 -> {
+                    rep.size == 1 -> prepararArchivo(rep[0])
+                    rep.isEmpty() && lista.isNotEmpty() -> prepararArchivo(lista.maxByOrNull { it.tam }!!)
+                    rep.size > 1 -> {
                         necesitaElegir = true
                         estado = "Elige un archivo del torrent"
                     }
@@ -330,6 +340,9 @@ class PlaybackService : Service() {
     fun elegirArchivoTorrent(indice: Int) {
         val a = archivosTorrent.firstOrNull { it.indice == indice } ?: return
         necesitaElegir = false
+        objetivoTorrent = a
+        fin = false
+        error = null
         hiloTorrent?.interrupt()
         guardarPos()
         val t = Thread {
@@ -348,6 +361,7 @@ class PlaybackService : Service() {
     /** Hilo de fondo: prioriza, espera al buffer de arranque y entonces arranca libVLC contra el servidor local. */
     private fun prepararArchivo(a: ArchivoTorrent) {
         val f = fuente ?: return
+        objetivoTorrent = a
         motor.seleccionar(a)
         while (!motor.listo()) {
             if (Thread.currentThread().isInterrupted || motor.cancelado) return
@@ -404,11 +418,18 @@ class PlaybackService : Service() {
                         actualizarSesion()
                     }
                     MediaPlayer.Event.EndReached -> {
-                        fin = true
                         ajustes.guardarPosicion(claveRep, 0L)
-                        liberarBloqueos()
-                        actualizarSesion()
-                        notificar()
+                        val sig = if (esTorrent) siguienteEnLista() else null
+                        if (sig != null) {
+                            // Pasa solo al siguiente archivo del torrent (capítulo, pista…).
+                            avisoUi = "Siguiente: " + sig.nombre
+                            elegirArchivoTorrent(sig.indice)
+                        } else {
+                            fin = true
+                            liberarBloqueos()
+                            actualizarSesion()
+                            notificar()
+                        }
                     }
                     MediaPlayer.Event.EncounteredError -> {
                         error = "No se puede reproducir este contenido"
@@ -486,6 +507,20 @@ class PlaybackService : Service() {
         stopSelf()
     }
 
+    /**
+     * Cierra la reproducción pero deja el torrent vivo para que acaben de bajarse y copiarse los archivos marcados
+     * para guardar. Cuando terminan, el servicio se cierra solo (bucleGuardado).
+     */
+    fun soloDescarga() {
+        guardarPos()
+        hiloTorrent?.interrupt()
+        destruirReproductor()
+        abandonarFoco()
+        sesion?.isActive = false
+        estado = ""
+        notificar()
+    }
+
     private fun guardarPos() {
         val m = mp ?: return
         if (claveRep.isEmpty() || fin) return
@@ -511,6 +546,161 @@ class PlaybackService : Service() {
     }
 
     private var ultimaUrl: String? = null
+
+    // ---------------------------------------------------------------- lista del torrent (⏮ ⏭)
+
+    /** Vídeos y audios del torrent en orden «natural» (CD2 antes que CD10), de carpeta en carpeta. */
+    @Synchronized
+    fun listaReproducible(): List<ArchivoTorrent> {
+        val o = archivosTorrent
+        if (o !== memoOrigen) {
+            memoLista = o.filter { it.esReproducible }.sortedWith { x, y -> Utiles.comparaNatural(x.ruta, y.ruta) }
+            memoOrigen = o
+        }
+        return memoLista
+    }
+
+    val hayLista: Boolean get() = esTorrent && listaReproducible().size > 1
+
+    private fun posicionEnLista(l: List<ArchivoTorrent>): Int {
+        val c = objetivoTorrent ?: archivoTorrentActual ?: return -1
+        return l.indexOfFirst { it.indice == c.indice }
+    }
+
+    private fun siguienteEnLista(): ArchivoTorrent? {
+        val l = listaReproducible()
+        val i = posicionEnLista(l)
+        return if (i >= 0 && i < l.size - 1) l[i + 1] else null
+    }
+
+    fun haySiguiente(): Boolean = esTorrent && siguienteEnLista() != null
+
+    fun siguiente(): Boolean {
+        val s = siguienteEnLista() ?: return false
+        elegirArchivoTorrent(s.indice)
+        return true
+    }
+
+    /** Si ya llevas más de 5 s vuelve al principio del archivo; si no, va al anterior. */
+    fun anterior() {
+        val l = listaReproducible()
+        val i = posicionEnLista(l)
+        val m = mp
+        val t = try { m?.time ?: 0L } catch (e: Throwable) { 0L }
+        if (i > 0 && t <= 5000L) {
+            elegirArchivoTorrent(l[i - 1].indice)
+        } else {
+            m?.setTime(0L)
+        }
+    }
+
+    // ---------------------------------------------------------------- guardar en el dispositivo
+
+    /** -2 sin marcar, 0 descargando, 1 copiando, 2 guardado, -1 error. */
+    fun estadoGuardado(a: ArchivoTorrent): Int = motor.guardado[a.indice] ?: -2
+
+    fun hayGuardadoPendiente(): Boolean = esTorrent && motor.pendientesGuardar() > 0
+
+    /** Espacio libre donde se descarga (la caché de la app). */
+    fun espacioLibre(): Long = cacheDir.usableSpace
+
+    /** Marca o desmarca archivos para conservarlos. */
+    fun guardarArchivos(lista: List<ArchivoTorrent>, si: Boolean) {
+        for (a in lista) motor.marcarGuardar(a, si)
+        if (si && motor.pendientesGuardar() > 0) arrancarGuardado()
+        notificar()
+    }
+
+    /** «2 archivos · 37 %» para la notificación. */
+    fun resumenGuardado(): String {
+        val g = motor.pendientesGuardar()
+        if (g == 0) return ""
+        var suma = 0
+        var n = 0
+        for ((idx, st) in motor.guardado.entries) {
+            if (st == 1) {
+                suma += 100
+                n++
+            } else if (st == 0) {
+                val a = archivosTorrent.firstOrNull { it.indice == idx } ?: continue
+                suma += motor.progresoArchivo(a)
+                n++
+            }
+        }
+        val pct = if (n > 0) suma / n else 0
+        return (if (g == 1) "1 archivo" else "$g archivos") + " · " + pct + " %"
+    }
+
+    private fun arrancarGuardado() {
+        synchronized(candadoGuardado) {
+            if (hiloGuardado != null && genGuardado == motor.generacion) return
+            tomarBloqueos()
+            val gen = motor.generacion
+            val t = Thread { bucleGuardado(gen) }
+            hiloGuardado = t
+            genGuardado = gen
+            t.start()
+        }
+    }
+
+    /**
+     * Hilo de fondo: cuando un archivo marcado termina de bajarse lo copia a Descargas. Dura mientras haya archivos
+     * pendientes; si ya no se está reproduciendo nada, al acabar cierra el servicio (y se borra la caché).
+     */
+    private fun bucleGuardado(gen: Int) {
+        val intentos = HashMap<Int, Int>()
+        while (true) {
+            val salir = synchronized(candadoGuardado) {
+                if (motor.generacion != gen || motor.pendientesGuardar() == 0) {
+                    if (hiloGuardado === Thread.currentThread()) hiloGuardado = null
+                    true
+                } else {
+                    false
+                }
+            }
+            if (salir) break
+            for ((idx, st) in motor.guardado.entries.toList()) {
+                if (st != 0) continue
+                val a = archivosTorrent.firstOrNull { it.indice == idx } ?: continue
+                if (motor.progresoArchivo(a) < 100) continue
+                val f = motor.rutaLocal(a)
+                if (f == null || !f.exists() || f.length() < a.tam) {
+                    val n = (intentos[idx] ?: 0) + 1
+                    intentos[idx] = n
+                    if (n > 20) {
+                        motor.errorGuardado[idx] = "El archivo descargado está incompleto en el disco"
+                        motor.guardado[idx] = -1
+                    }
+                    continue
+                }
+                motor.guardado[idx] = 1
+                main.post { notificar() }
+                val err = Exportar.aDescargas(this, f, a.ruta) { motor.generacion != gen }
+                if (motor.generacion != gen) break
+                if (err == null) {
+                    motor.guardado[idx] = 2
+                    avisoUi = "Guardado en " + Exportar.destinoTexto() + ": " + a.nombre
+                } else {
+                    motor.errorGuardado[idx] = err
+                    motor.guardado[idx] = -1
+                    avisoUi = "No se pudo guardar " + a.nombre + ": " + err
+                }
+            }
+            main.post { notificar() }
+            try {
+                Thread.sleep(2000)
+            } catch (e: InterruptedException) {
+                synchronized(candadoGuardado) { if (hiloGuardado === Thread.currentThread()) hiloGuardado = null }
+                break
+            }
+        }
+        main.post {
+            if (motor.generacion == gen && motor.pendientesGuardar() == 0) {
+                if (mp == null) detener() else if (mp?.isPlaying != true) soltarBloqueos()
+                if (mp != null) notificar()
+            }
+        }
+    }
 
     // ---------------------------------------------------------------- subtitulos
 
@@ -645,7 +835,13 @@ class PlaybackService : Service() {
         }
     }
 
+    /** Mientras se estén guardando archivos no se sueltan los bloqueos (la descarga sigue con la pantalla apagada). */
     private fun liberarBloqueos() {
+        if (hayGuardadoPendiente()) return
+        soltarBloqueos()
+    }
+
+    private fun soltarBloqueos() {
         try { if (wake?.isHeld == true) wake?.release() } catch (e: Exception) { /* nada */ }
         try { if (wifi?.isHeld == true) wifi?.release() } catch (e: Exception) { /* nada */ }
     }
@@ -654,9 +850,10 @@ class PlaybackService : Service() {
         val s = sesion ?: return
         val m = mp
         val sonando = m?.isPlaying == true
-        val acciones = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or
+        var acciones = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or
             PlaybackState.ACTION_SEEK_TO or PlaybackState.ACTION_STOP or PlaybackState.ACTION_FAST_FORWARD or
             PlaybackState.ACTION_REWIND
+        if (hayLista) acciones = acciones or PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS
         val pos = try { m?.time ?: 0L } catch (e: Throwable) { 0L }
         val len = try { m?.length ?: 0L } catch (e: Throwable) { 0L }
         s.setPlaybackState(
@@ -697,11 +894,13 @@ class PlaybackService : Service() {
             return Notification.Action.Builder(Icon.createWithResource(this, icono), texto, pi).build()
         }
 
+        val guardando = if (esTorrent) resumenGuardado() else ""
         val texto = when {
             error != null -> error!!
             estado.isNotEmpty() -> estado
-            sonando -> "Reproduciendo"
-            else -> "En pausa"
+            mp == null && guardando.isNotEmpty() -> "Guardando en el dispositivo: $guardando"
+            sonando -> "Reproduciendo" + (if (guardando.isNotEmpty()) " · guardando $guardando" else "")
+            else -> "En pausa" + (if (guardando.isNotEmpty()) " · guardando $guardando" else "")
         }
         val estilo = Notification.MediaStyle().setShowActionsInCompactView(0, 1, 2)
         sesion?.let { estilo.setMediaSession(it.sessionToken) }
