@@ -64,6 +64,12 @@ class PlayerActivity : Activity() {
     private lateinit var tiempoTv: TextView
     private lateinit var btnPlay: TextView
 
+    private lateinit var panelStats: TextView
+    private lateinit var barraSync: LinearLayout
+    private lateinit var syncTv: TextView
+    private var cuesSync: List<Long> = emptyList()
+    private var cueObjetivo = -1L
+
     private var adjunto: MediaPlayer? = null
     private var arrastrando = false
     private var capaVisible = true
@@ -289,6 +295,19 @@ class PlayerActivity : Activity() {
         barraInf.addView(filaBot)
         raiz.addView(barraInf, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
 
+        // Panel de estadísticas del torrent (arriba a la izquierda, pequeño y translúcido).
+        panelStats = texto("", 12f)
+        panelStats.gravity = Gravity.START
+        panelStats.setBackgroundColor(0x77000000)
+        panelStats.setPadding(dp(8), dp(4), dp(8), dp(4))
+        panelStats.visibility = View.GONE
+        val lpStats = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START)
+        lpStats.topMargin = dp(60)
+        lpStats.leftMargin = dp(40)
+        raiz.addView(panelStats, lpStats)
+
+        construirSync()
+
         // Gestos sobre el vídeo: un toque muestra/oculta controles, doble toque salta, deslizar = brillo / volumen.
         val gestos = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent): Boolean {
@@ -331,6 +350,132 @@ class PlayerActivity : Activity() {
             }
         }
         ocultarEn = SystemClock.uptimeMillis() + 4000
+    }
+
+    // ---------------------------------------------------------------- sincronización de subtítulos
+
+    private fun miniBoton(t: String, alPulsar: () -> Unit): TextView {
+        val tv = texto(t, 14f)
+        tv.minWidth = dp(44)
+        tv.minHeight = dp(40)
+        tv.setBackgroundColor(0x33FFFFFF)
+        tv.setPadding(dp(8), dp(4), dp(8), dp(4))
+        tv.setOnClickListener { alPulsar() }
+        return tv
+    }
+
+    private fun construirSync() {
+        barraSync = LinearLayout(this)
+        barraSync.orientation = LinearLayout.VERTICAL
+        barraSync.setBackgroundColor(0xAA000000.toInt())
+        barraSync.setPadding(dp(8), dp(4), dp(8), dp(6))
+        barraSync.isClickable = true
+        barraSync.visibility = View.GONE
+
+        syncTv = texto("", 14f)
+        barraSync.addView(syncTv)
+
+        fun fila(vararg items: View): LinearLayout {
+            val f = LinearLayout(this)
+            f.orientation = LinearLayout.HORIZONTAL
+            f.gravity = Gravity.CENTER
+            for (v in items) {
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                lp.setMargins(dp(2), dp(2), dp(2), dp(2))
+                f.addView(v, lp)
+            }
+            return f
+        }
+
+        val pasos = longArrayOf(-500L, -100L, -50L, 50L, 100L, 500L)
+        val botonesPaso = ArrayList<View>()
+        for (p in pasos) botonesPaso.add(miniBoton((if (p > 0) "+" else "") + p) { cambiarDesfase(p) })
+        barraSync.addView(fila(*botonesPaso.toTypedArray()))
+
+        barraSync.addView(
+            fila(
+                miniBoton("◀ Línea") { irALinea(-1) },
+                miniBoton("Línea ▶") { irALinea(1) },
+                miniBoton("● AHORA") { fijarAhora() },
+                miniBoton("0") { fijarDesfase(0L) },
+                miniBoton("✕") { barraSync.visibility = View.GONE }
+            )
+        )
+
+        val ayuda = texto("«Línea ▶» salta un poco antes de un diálogo. Pulsa «AHORA» justo cuando EMPIECES a oír esa frase.", 11f)
+        ayuda.alpha = 0.75f
+        barraSync.addView(ayuda)
+
+        val lp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END)
+        lp.topMargin = dp(60)
+        lp.rightMargin = dp(40)
+        raiz.addView(barraSync, lp)
+    }
+
+    private fun abrirSync() {
+        val s = svc ?: return
+        val f = s.archivoSubsActual()
+        cuesSync = if (f != null) Utiles.tiemposSubs(f) else emptyList()
+        cueObjetivo = -1L
+        barraSync.visibility = View.VISIBLE
+        pintarSync()
+        if (cuesSync.isEmpty()) aviso("Sin archivo externo: solo ajuste con los botones ±")
+    }
+
+    private fun pintarSync() {
+        val ms = (svc?.retardoSubs ?: 0L) / 1000L
+        val linea = if (cueObjetivo >= 0 && cuesSync.isNotEmpty()) "  ·  línea ${cuesSync.indexOf(cueObjetivo) + 1}/${cuesSync.size}" else ""
+        syncTv.text = "Desfase: " + (if (ms > 0) "+" else "") + ms + " ms" + linea
+    }
+
+    private fun fijarDesfase(ms: Long) {
+        svc?.fijarRetardoSubs(ms)
+        pintarSync()
+    }
+
+    private fun cambiarDesfase(delta: Long) {
+        val actual = (svc?.retardoSubs ?: 0L) / 1000L
+        fijarDesfase(actual + delta)
+    }
+
+    /** Salta a un instante un poco anterior a la línea siguiente/anterior para poder oírla entera. */
+    private fun irALinea(dir: Int) {
+        val s = svc ?: return
+        val m = s.mp ?: return
+        if (cuesSync.isEmpty()) {
+            aviso("Esta función necesita subtítulos externos")
+            return
+        }
+        val desfase = s.retardoSubs / 1000L
+        val t = m.time
+        val idx = if (cueObjetivo >= 0) {
+            cuesSync.indexOf(cueObjetivo) + dir
+        } else if (dir > 0) {
+            cuesSync.indexOfFirst { it + desfase > t + 300L }
+        } else {
+            cuesSync.indexOfLast { it + desfase < t - 1500L }
+        }
+        if (idx < 0 || idx >= cuesSync.size) {
+            aviso("No hay más líneas")
+            return
+        }
+        cueObjetivo = cuesSync[idx]
+        m.setTime((cueObjetivo + desfase - 1200L).coerceAtLeast(0L))
+        m.play()
+        pintarSync()
+    }
+
+    /** El usuario oye AHORA la línea objetivo: el desfase es la diferencia entre ese instante y el de su subtítulo. */
+    private fun fijarAhora() {
+        val m = svc?.mp ?: return
+        if (cueObjetivo < 0) {
+            aviso("Pulsa «Línea ▶» primero")
+            return
+        }
+        // -250 ms: el tiempo que tarda un dedo en reaccionar. Se afina con los botones ±.
+        val nuevo = m.time - cueObjetivo - 250L
+        fijarDesfase(nuevo)
+        aviso("Desfase " + nuevo + " ms")
     }
 
     private fun mostrarCapa() {
@@ -409,6 +554,16 @@ class PlayerActivity : Activity() {
         }
         tituloTv.text = s.titulo
 
+        if (aj.mostrarStats && s.esTorrent && m != null && s.error == null && s.estado.isEmpty()) {
+            val len2 = try { m.length } catch (e: Throwable) { 0L }
+            val t2 = try { m.time } catch (e: Throwable) { 0L }
+            val st = s.motor.estadisticasDetalle(if (len2 > 0) t2.toDouble() / len2 else 0.0, len2)
+            panelStats.text = st
+            panelStats.visibility = if (st.isEmpty()) View.GONE else View.VISIBLE
+        } else {
+            panelStats.visibility = View.GONE
+        }
+
         val msg = when {
             s.error != null -> s.error!!
             s.estado.isNotEmpty() -> s.estado
@@ -450,6 +605,13 @@ class PlayerActivity : Activity() {
         val acciones = ArrayList<() -> Unit>()
         etiquetas.add("Velocidad"); acciones.add { menuVelocidad() }
         etiquetas.add("Decodificación de vídeo"); acciones.add { menuDecodificacion() }
+        if (s.esTorrent) {
+            etiquetas.add("Estadísticas del torrent: " + (if (aj.mostrarStats) "sí" else "no"))
+            acciones.add {
+                aj.mostrarStats = !aj.mostrarStats
+                aviso(if (aj.mostrarStats) "Estadísticas activadas" else "Estadísticas ocultas")
+            }
+        }
         etiquetas.add("Retardo del audio"); acciones.add {
             DialogoSubs.desfase(this, "Retardo del audio", (s.mp?.audioDelay ?: 0L) / 1000L) { ms ->
                 s.mp?.setAudioDelay(ms * 1000L)
@@ -527,9 +689,7 @@ class PlayerActivity : Activity() {
         }
         etiquetas.add("Cargar archivo de subtítulos…"); acciones.add { elegirArchivoSubs() }
         etiquetas.add("Buscar en OpenSubtitles…"); acciones.add { buscarOnline() }
-        etiquetas.add("Desfase…"); acciones.add {
-            DialogoSubs.desfase(this, "Desfase de subtítulos", s.retardoSubs / 1000L) { ms -> s.fijarRetardoSubs(ms) }
-        }
+        etiquetas.add("Sincronizar / desfase…"); acciones.add { abrirSync() }
         etiquetas.add("Estilo (tamaño, color, fondo…)"); acciones.add {
             DialogoSubs.estilo(this, aj) {
                 aviso("Aplicando estilo…")
