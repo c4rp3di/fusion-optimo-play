@@ -76,6 +76,7 @@ object Informacion {
         val f = s.fuente
         val uri = f?.uri ?: ""
         val tipo = when {
+            s.hayCanales -> "Lista de canales M3U (" + s.canales.size + " canales)"
             s.esTorrent -> "Torrent (se reproduce desde un servidor local)"
             uri.startsWith("content:", true) -> "Archivo del dispositivo"
             uri.startsWith("file:", true) -> "Archivo del dispositivo"
@@ -86,6 +87,11 @@ object Informacion {
         }
         sb.append("Fuente: ").append(tipo).append('\n')
         sb.append("Título: ").append(s.titulo).append('\n')
+        val canal = s.canalActivo
+        if (canal != null) {
+            sb.append("Canal: ").append(canal.etiqueta).append(" · grupo ").append(canal.grupo).append('\n')
+            sb.append("Guía: ").append(if (s.estadoGuia.isEmpty()) "(sin guía)" else s.estadoGuia).append('\n')
+        }
         sb.append("URI recibida:\n  ").append(recortar(uri, 400)).append('\n')
         val real = s.urlReproduccion
         if (real != null && real != uri) sb.append("URL usada por libVLC:\n  ").append(recortar(real, 400)).append('\n')
