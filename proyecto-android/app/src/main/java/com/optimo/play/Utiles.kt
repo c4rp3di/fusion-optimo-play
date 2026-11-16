@@ -15,7 +15,42 @@ object Utiles {
         "mkv", "mp4", "avi", "mov", "webm", "m4v", "ts", "m2ts", "mts", "mpg", "mpeg", "wmv", "flv", "3gp", "ogv", "vob"
     )
 
+    private val EXT_AUDIO = setOf("mp3", "flac", "m4a", "aac", "ogg", "opus", "wav", "wma", "ape", "alac", "mka")
+
     fun esVideo(nombre: String): Boolean = EXT_VIDEO.contains(nombre.substringAfterLast('.', "").lowercase())
+
+    fun esAudio(nombre: String): Boolean = EXT_AUDIO.contains(nombre.substringAfterLast('.', "").lowercase())
+
+    /** Vídeo o audio: lo que se puede poner en la lista de reproducción de un torrent. */
+    fun esReproducible(nombre: String): Boolean = esVideo(nombre) || esAudio(nombre)
+
+    /** Orden «natural»: «CD2» antes que «CD10», «pista 9» antes que «pista 10». Sin distinguir mayúsculas. */
+    fun comparaNatural(a: String, b: String): Int {
+        val x = a.lowercase()
+        val y = b.lowercase()
+        var i = 0
+        var j = 0
+        while (i < x.length && j < y.length) {
+            if (x[i].isDigit() && y[j].isDigit()) {
+                var ie = i
+                while (ie < x.length && x[ie].isDigit()) ie++
+                var je = j
+                while (je < y.length && y[je].isDigit()) je++
+                val nx = x.substring(i, ie).trimStart('0')
+                val ny = y.substring(j, je).trimStart('0')
+                if (nx.length != ny.length) return nx.length - ny.length
+                val c = nx.compareTo(ny)
+                if (c != 0) return c
+                i = ie
+                j = je
+            } else {
+                if (x[i] != y[j]) return x[i].compareTo(y[j])
+                i++
+                j++
+            }
+        }
+        return (x.length - i) - (y.length - j)
+    }
 
     /** Tipo MIME aproximado para el servidor local del torrent. */
     fun tipoMime(nombre: String): String = when (nombre.substringAfterLast('.', "").lowercase()) {
@@ -28,6 +63,8 @@ object Utiles {
         "flac" -> "audio/flac"
         "m4a" -> "audio/mp4"
         "ogg", "opus" -> "audio/ogg"
+        "wav" -> "audio/wav"
+        "aac" -> "audio/aac"
         else -> "application/octet-stream"
     }
 
