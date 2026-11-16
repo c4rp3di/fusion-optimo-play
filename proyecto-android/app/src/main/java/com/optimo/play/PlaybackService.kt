@@ -84,6 +84,12 @@ class PlaybackService : Service() {
     @Volatile var retardoSubs: Long = 0L // microsegundos
         private set
 
+    /** Último evento de libVLC (para el panel «Información» y el aviso de «sin respuesta»). */
+    @Volatile var ultimoEvento: String = ""
+
+    /** URL que se le dio a libVLC (en un torrent es la del servidor local). */
+    val urlReproduccion: String? get() = ultimaUrl
+
     private var claveRep: String = ""
     private var posReanudar = 0L
     private var inicioHecho = false
@@ -156,6 +162,16 @@ class PlaybackService : Service() {
 
     // ---------------------------------------------------------------- abrir contenido
 
+    /**
+     * ¿Hay que abrir [uri] aunque sea la misma que ya está cargada? Sí si es distinta, o si la anterior falló,
+     * terminó o nunca llegó a sonar: así reenviar la misma URL desde Optimo vuelve a intentarlo.
+     */
+    fun debeAbrir(uri: String): Boolean {
+        if (fuente?.uri != uri) return true
+        if (mp == null) return true
+        return error != null || fin
+    }
+
     /** Empieza a reproducir una fuente nueva (URL, archivo, magnet o .torrent). */
     fun abrir(f: Fuente) {
         guardarPos()
@@ -164,6 +180,7 @@ class PlaybackService : Service() {
         error = null
         fin = false
         estado = ""
+        ultimoEvento = ""
         necesitaElegir = false
         archivosTorrent = emptyList()
         subsExternas.clear()
@@ -207,6 +224,7 @@ class PlaybackService : Service() {
     }
 
     private fun destruirReproductor() {
+        main.removeCallbacks(vigilanteInicio)
         val m = mp
         val v = libvlc
         mp = null
@@ -260,6 +278,22 @@ class PlaybackService : Service() {
         m.setMedia(media)
         media.release()
         m.play()
+        main.removeCallbacks(vigilanteInicio)
+        main.postDelayed(vigilanteInicio, 12_000L)
+    }
+
+    /**
+     * Si libVLC no llega a reproducir en 12 s no hay evento de error (p. ej. una URL que no es un vídeo): se avisa en
+     * pantalla en vez de dejar solo el título. Si luego empieza a sonar, alReproducir() quita el aviso.
+     */
+    private val vigilanteInicio = Runnable {
+        if (mp != null && !inicioHecho && error == null) {
+            val u = ultimaUrl ?: ""
+            val corta = if (u.length > 90) u.substring(0, 90) + "…" else u
+            error = "No ha empezado a reproducir tras 12 s (libVLC: " +
+                (if (ultimoEvento.isEmpty()) "sin respuesta" else ultimoEvento) +
+                ").\n" + corta + "\nMás detalles en ⋮ › Información"
+        }
     }
 
     // ---------------------------------------------------------------- torrent
@@ -356,6 +390,7 @@ class PlaybackService : Service() {
             val tipo = event.type
             val buf = event.buffering
             main.post {
+                ultimoEvento = nombreEvento(tipo)
                 when (tipo) {
                     MediaPlayer.Event.Playing -> alReproducir()
                     MediaPlayer.Event.Paused -> {
@@ -383,6 +418,17 @@ class PlaybackService : Service() {
                 }
             }
         }
+    }
+
+    private fun nombreEvento(tipo: Int): String = when (tipo) {
+        MediaPlayer.Event.Opening -> "Opening (abriendo)"
+        MediaPlayer.Event.Buffering -> "Buffering"
+        MediaPlayer.Event.Playing -> "Playing"
+        MediaPlayer.Event.Paused -> "Paused"
+        MediaPlayer.Event.Stopped -> "Stopped"
+        MediaPlayer.Event.EndReached -> "EndReached"
+        MediaPlayer.Event.EncounteredError -> "EncounteredError"
+        else -> "evento 0x" + Integer.toHexString(tipo)
     }
 
     private fun alReproducir() {
