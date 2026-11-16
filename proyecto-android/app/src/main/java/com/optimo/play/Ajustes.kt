@@ -90,6 +90,11 @@ class Ajustes(ctx: Context) {
         get() = sp.getInt("decod", 0)
         set(v) { sp.edit().putInt("decod", v).apply() }
 
+    /** Panel con velocidad, progreso y peers mientras suena un torrent. */
+    var mostrarStats: Boolean
+        get() = sp.getBoolean("stats", true)
+        set(v) { sp.edit().putBoolean("stats", v).apply() }
+
     var segundoPlano: Boolean
         get() = sp.getBoolean("segundo_plano", true)
         set(v) { sp.edit().putBoolean("segundo_plano", v).apply() }
