@@ -15,6 +15,7 @@ import java.io.IOException
 class ArchivoTorrent(val indice: Int, val ruta: String, val tam: Long, val offset: Long) {
     val nombre: String get() = ruta.substringAfterLast('/')
     val esVideo: Boolean get() = Utiles.esVideo(nombre)
+    val esReproducible: Boolean get() = Utiles.esReproducible(nombre)
 }
 
 /**
@@ -30,6 +31,10 @@ class ArchivoTorrent(val indice: Int, val ruta: String, val tam: Long, val offse
 class MotorTorrent(private val ctx: Context) {
 
     @Volatile var cancelado = false
+
+    /** Sube cada vez que se cierra el torrent: quien guardaba archivos del anterior sabe que debe parar. */
+    @Volatile var generacion = 0
+        private set
     @Volatile var carpeta: File? = null
         private set
     @Volatile var archivo: ArchivoTorrent? = null
@@ -42,6 +47,66 @@ class MotorTorrent(private val ctx: Context) {
     private var piezasCola = 1
 
     private val cachePrio = HashMap<Int, Priority>()
+
+    // ---- guardar en el dispositivo
+    /** Archivos marcados para conservar. Valor: 0 descargando, 1 copiando a Descargas, 2 guardado, -1 error. */
+    val guardado = java.util.concurrent.ConcurrentHashMap<Int, Int>()
+
+    /** Mensaje del último error al guardar cada archivo. */
+    val errorGuardado = java.util.concurrent.ConcurrentHashMap<Int, String>()
+
+    private val cacheArchivo = HashMap<Int, Pair<Long, Int>>()
+
+    fun pendientesGuardar(): Int = guardado.values.count { it == 0 || it == 1 }
+
+    /** Marca (o desmarca) un archivo para guardarlo entero. Un archivo ya copiado o copiándose no se toca. */
+    fun marcarGuardar(a: ArchivoTorrent, si: Boolean) {
+        val h = th ?: return
+        try {
+            if (si) {
+                val st = guardado[a.indice]
+                if (st == 1 || st == 2) return
+                guardado[a.indice] = 0
+                errorGuardado.remove(a.indice)
+                h.filePriority(a.indice, prio(4))
+            } else {
+                val st = guardado[a.indice]
+                if (st == 1 || st == 2) return
+                guardado.remove(a.indice)
+                errorGuardado.remove(a.indice)
+                if (archivo?.indice != a.indice) h.filePriority(a.indice, Priority.IGNORE)
+            }
+        } catch (e: Exception) {
+            // Torrent ya cerrado.
+        }
+    }
+
+    /** % de piezas de este archivo que ya están descargadas (se recalcula como mucho cada 2 s). */
+    @Synchronized
+    fun progresoArchivo(a: ArchivoTorrent): Int {
+        val h = th ?: return 0
+        val ti = info ?: return 0
+        val ahora = System.currentTimeMillis()
+        val c = cacheArchivo[a.indice]
+        if (c != null && ahora - c.first < 2000) return c.second
+        return try {
+            if (!h.isValid) return 0
+            val pl = ti.pieceLength().toLong()
+            val p0 = (a.offset / pl).toInt()
+            val p1 = ((a.offset + a.tam - 1) / pl).toInt()
+            var tengo = 0
+            for (p in p0..p1) if (h.havePiece(p)) tengo++
+            val total = p1 - p0 + 1
+            val pct = if (total > 0) (tengo.toLong() * 100 / total).toInt() else 0
+            cacheArchivo[a.indice] = Pair(ahora, pct)
+            pct
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    /** Dónde escribe libtorrent este archivo. */
+    fun rutaLocal(a: ArchivoTorrent): File? = carpeta?.let { File(it, a.ruta) }
 
     /**
      * Prioridad de libtorrent por su valor numérico (0 ignorar, 4 normal, 7 máxima).
@@ -236,7 +301,8 @@ class MotorTorrent(private val ctx: Context) {
         archivo = a
         val n = ti.files().numFiles()
         for (i in 0 until n) {
-            h.filePriority(i, if (i == a.indice) prio(4) else Priority.IGNORE)
+            val st = guardado[i]
+            h.filePriority(i, if (i == a.indice || st == 0 || st == -1) prio(4) else Priority.IGNORE)
         }
         val pl = ti.pieceLength().toLong()
         val primera = (a.offset / pl).toInt()
@@ -402,6 +468,7 @@ class MotorTorrent(private val ctx: Context) {
     /** Detiene el torrent actual y borra lo descargado. La sesión de libtorrent se mantiene lista. */
     fun cerrar() {
         cancelado = true
+        generacion++
         val h = th
         val s = sm
         if (h != null && s != null) {
@@ -410,6 +477,9 @@ class MotorTorrent(private val ctx: Context) {
         th = null
         info = null
         archivo = null
+        guardado.clear()
+        errorGuardado.clear()
+        synchronized(this) { cacheArchivo.clear() }
         val d = carpeta
         carpeta = null
         if (d != null) Thread { d.deleteRecursively() }.start()
