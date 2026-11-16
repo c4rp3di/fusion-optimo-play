@@ -85,6 +85,11 @@ class Ajustes(ctx: Context) {
     // ---------------------------------------------------------------- reproduccion
 
     /** Seguir sonando al bloquear la pantalla o salir al escritorio (con notificación de control). */
+    /** Decodificación de vídeo: 0 automática (hardware si puede), 1 solo software, 2 hardware forzado. */
+    var decodificacion: Int
+        get() = sp.getInt("decod", 0)
+        set(v) { sp.edit().putInt("decod", v).apply() }
+
     var segundoPlano: Boolean
         get() = sp.getBoolean("segundo_plano", true)
         set(v) { sp.edit().putBoolean("segundo_plano", v).apply() }
