@@ -1,18 +1,14 @@
 package com.optimo.play
 
 import android.content.Context
-import org.libtorrent4j.AlertListener
 import org.libtorrent4j.Priority
 import org.libtorrent4j.SessionManager
 import org.libtorrent4j.TorrentFlags
 import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
-import org.libtorrent4j.alerts.AddTorrentAlert
-import org.libtorrent4j.alerts.Alert
+import org.libtorrent4j.Sha1Hash
 import java.io.File
 import java.io.IOException
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 /** Un archivo dentro de un torrent. `offset` es su posición dentro del conjunto del torrent (para calcular piezas). */
 class ArchivoTorrent(val indice: Int, val ruta: String, val tam: Long, val offset: Long) {
@@ -41,19 +37,8 @@ class MotorTorrent(private val ctx: Context) {
     private var sm: SessionManager? = null
     @Volatile private var th: TorrentHandle? = null
     @Volatile private var info: TorrentInfo? = null
-    @Volatile private var latch: CountDownLatch? = null
     private var piezasCabeza = 1
     private var piezasCola = 1
-
-    private val oyente = object : AlertListener {
-        override fun types(): IntArray? = null
-        override fun alert(alert: Alert<*>) {
-            if (alert is AddTorrentAlert) {
-                th = alert.handle()
-                latch?.countDown()
-            }
-        }
-    }
 
     private val cachePrio = HashMap<Int, Priority>()
 
@@ -93,11 +78,39 @@ class MotorTorrent(private val ctx: Context) {
         var s = sm
         if (s == null) {
             s = SessionManager()
-            s.addListener(oyente)
             s.start()
             sm = s
         }
         return s
+    }
+
+    /** Extrae el info-hash (20 bytes) de un enlace magnet: btih en hexadecimal (40) o base32 (32). */
+    private fun hashDeMagnet(magnet: String): ByteArray {
+        val m = Regex("xt=urn:btih:([A-Za-z0-9]+)", RegexOption.IGNORE_CASE).find(magnet)
+            ?: throw IOException("Magnet sin info-hash (xt=urn:btih)")
+        val t = m.groupValues[1]
+        if (t.length == 40 && t.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) {
+            return ByteArray(20) { i -> t.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
+        }
+        if (t.length == 32) {
+            val alfabeto = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+            val salida = ByteArray(20)
+            var acumulado = 0
+            var bits = 0
+            var pos = 0
+            for (c in t.uppercase()) {
+                val v = alfabeto.indexOf(c)
+                if (v < 0) throw IOException("Info-hash base32 inválido")
+                acumulado = (acumulado shl 5) or v
+                bits += 5
+                if (bits >= 8) {
+                    bits -= 8
+                    if (pos < 20) salida[pos++] = ((acumulado shr bits) and 0xFF).toByte()
+                }
+            }
+            return salida
+        }
+        throw IOException("Info-hash de magnet no reconocido")
     }
 
     /**
@@ -111,30 +124,44 @@ class MotorTorrent(private val ctx: Context) {
         val d = File(ctx.cacheDir, "torrent/" + System.currentTimeMillis())
         d.mkdirs()
         carpeta = d
-        val l = CountDownLatch(1)
-        latch = l
         th = null
 
+        // OJO: el handle que llega dentro de una alerta apunta a memoria de la propia alerta, que se libera al
+        // terminar el aviso; guardarlo provoca un fallo nativo (SIGSEGV en torrent_handle::is_valid).
+        // Por eso se calcula el info-hash y se pide un handle propio con find().
+        val hash: Sha1Hash
         if (archivoTorrent != null) {
-            s.download(TorrentInfo(archivoTorrent), d)
+            val ti0 = TorrentInfo(archivoTorrent)
+            hash = ti0.infoHash()
+            s.download(ti0, d)
         } else {
+            hash = Sha1Hash(hashDeMagnet(origen))
             s.download(origen, d, TorrentFlags.SEQUENTIAL_DOWNLOAD)
         }
-        if (!l.await(30, TimeUnit.SECONDS)) throw IOException("No se pudo añadir el torrent")
-        val h = th ?: throw IOException("No se pudo añadir el torrent")
-        if (archivoTorrent != null) h.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
-        h.resume()
+        var h: TorrentHandle? = null
+        val limite = System.currentTimeMillis() + 30_000
+        while (h == null) {
+            if (cancelado) throw InterruptedException()
+            h = try { s.find(hash) } catch (e: Exception) { null }
+            if (h != null) break
+            if (System.currentTimeMillis() > limite) throw IOException("No se pudo añadir el torrent")
+            Thread.sleep(200)
+        }
+        val hOk: TorrentHandle = h ?: throw IOException("No se pudo añadir el torrent")
+        th = hOk
+        if (archivoTorrent != null) hOk.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
+        hOk.resume()
 
         val inicio = System.currentTimeMillis()
         var ti: TorrentInfo? = null
         while (ti == null) {
             if (cancelado) throw InterruptedException()
-            ti = try { h.torrentFile() } catch (e: Exception) { null }
+            ti = try { hOk.torrentFile() } catch (e: Exception) { null }
             if (ti != null) break
             if (System.currentTimeMillis() - inicio > 180_000) {
                 throw IOException("Sin metadatos tras 3 minutos (¿hay peers o trackers vivos?)")
             }
-            val peers = try { h.status().numPeers() } catch (e: Exception) { 0 }
+            val peers = try { hOk.status().numPeers() } catch (e: Exception) { 0 }
             estado("Buscando metadatos… $peers peers")
             Thread.sleep(700)
         }
@@ -182,6 +209,7 @@ class MotorTorrent(private val ctx: Context) {
         val h = th ?: return false
         val ti = info ?: return false
         val a = archivo ?: return false
+        if (!h.isValid) return false
         val pl = ti.pieceLength().toLong()
         val primera = (a.offset / pl).toInt()
         val ultima = ((a.offset + a.tam - 1) / pl).toInt()
@@ -224,6 +252,7 @@ class MotorTorrent(private val ctx: Context) {
         val ultima = ((a.offset + a.tam - 1) / pl).toInt()
         var vueltas = 0
         while (!cancelado) {
+            if (!h.isValid) return false
             var faltan = false
             for (p in p0..p1) {
                 if (!h.havePiece(p)) {
@@ -260,7 +289,6 @@ class MotorTorrent(private val ctx: Context) {
         th = null
         info = null
         archivo = null
-        latch = null
         val d = carpeta
         carpeta = null
         if (d != null) Thread { d.deleteRecursively() }.start()
