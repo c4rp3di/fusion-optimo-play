@@ -432,6 +432,7 @@ class PlayerActivity : Activity() {
         val etiquetas = ArrayList<String>()
         val acciones = ArrayList<() -> Unit>()
         etiquetas.add("Velocidad"); acciones.add { menuVelocidad() }
+        etiquetas.add("Decodificación de vídeo"); acciones.add { menuDecodificacion() }
         etiquetas.add("Retardo del audio"); acciones.add {
             DialogoSubs.desfase(this, "Retardo del audio", (s.mp?.audioDelay ?: 0L) / 1000L) { ms ->
                 s.mp?.setAudioDelay(ms * 1000L)
@@ -453,6 +454,21 @@ class PlayerActivity : Activity() {
         lista("Velocidad", vel.map { "${it}×" }) {
             svc?.mp?.setRate(vel[it])
             aviso("Velocidad ${vel[it]}×")
+        }
+    }
+
+    /** Si un vídeo (p. ej. HEVC/x265) sale en negro con audio, casi siempre basta cambiar a «Solo software». */
+    private fun menuDecodificacion() {
+        val nombres = listOf(
+            "Automática (hardware si puede)",
+            "Solo software (CPU) · recomendado si sale en negro",
+            "Hardware forzado"
+        )
+        val actual = aj.decodificacion
+        lista("Decodificación de vídeo", nombres.mapIndexed { i, n -> (if (i == actual) "● " else "") + n }) {
+            aj.decodificacion = it
+            aviso("Aplicando…")
+            svc?.reconstruir()
         }
     }
 
