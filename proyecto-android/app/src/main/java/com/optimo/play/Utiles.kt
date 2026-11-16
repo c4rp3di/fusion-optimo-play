@@ -2,6 +2,7 @@ package com.optimo.play
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
 import java.net.URLDecoder
 import java.nio.ByteBuffer
@@ -16,6 +17,37 @@ object Utiles {
     )
 
     private val EXT_AUDIO = setOf("mp3", "flac", "m4a", "aac", "ogg", "opus", "wav", "wma", "ape", "alac", "mka")
+
+    /** User-Agent de móvil que se manda a las listas, guías y canales si no traen el suyo. */
+    const val UA_MOVIL = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+    /**
+     * Muchas listas de canales llevan marcas que debe rellenar el reproductor: [UA], [DEVICE_ID], [LMT]…
+     * Se sustituyen: privacidad al máximo (limitar publicidad personalizada, no vender datos), un identificador
+     * aleatorio por sesión en vez del real, y vacío lo que no se conoce.
+     */
+    fun resolverMarcas(url: String, ua: String, idSesion: String): String {
+        if (!url.contains('[')) return url
+        return Regex("\\[([A-Z0-9_]+)\\]").replace(url) { m ->
+            when (m.groupValues[1]) {
+                "LMT", "DNS" -> "1"
+                "US_PRIVACY" -> "1YYN"
+                "DEVICE_ID" -> idSesion
+                "UA" -> Uri.encode(ua)
+                "APP_BUNDLE" -> "com.optimo.play"
+                "APP_NAME" -> "OptimoPlay"
+                "DEVICE_MAKE" -> Uri.encode(Build.MANUFACTURER)
+                "DEVICE_MODEL" -> Uri.encode(Build.MODEL)
+                "GDPR" -> "0"
+                "VIEWSIZE" -> "1280x720"
+                "NONCE" -> java.util.UUID.randomUUID().toString().replace("-", "").take(16)
+                else -> ""
+            }
+        }
+    }
+
+    /** Hora local «HH:mm». */
+    fun hora(ms: Long): String = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ms))
 
     fun esVideo(nombre: String): Boolean = EXT_VIDEO.contains(nombre.substringAfterLast('.', "").lowercase())
 
