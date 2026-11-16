@@ -204,6 +204,9 @@ class PlayerActivity : Activity() {
 
     private fun boton(t: String, alPulsar: () -> Unit): TextView {
         val tv = texto(t, 18f)
+        // Zona de toque cómoda (48 dp mínimo) para no fallar los botones pequeños.
+        tv.minWidth = dp(56)
+        tv.minHeight = dp(48)
         tv.setOnClickListener {
             alPulsar()
             ocultarEn = SystemClock.uptimeMillis() + 4000
@@ -233,6 +236,9 @@ class PlayerActivity : Activity() {
         barraSup.orientation = LinearLayout.HORIZONTAL
         barraSup.gravity = Gravity.CENTER_VERTICAL
         barraSup.setBackgroundColor(0x88000000.toInt())
+        // Margen lateral: con navegación por gestos (MIUI) los ~30 dp del borde los coge el sistema (gesto «atrás»)
+        // y un botón pegado a la esquina no recibe el toque.
+        barraSup.setPadding(dp(40), dp(4), dp(40), dp(4))
         barraSup.addView(boton("✕") { finish() })
         tituloTv = texto("", 16f)
         tituloTv.gravity = Gravity.START or Gravity.CENTER_VERTICAL
@@ -313,6 +319,17 @@ class PlayerActivity : Activity() {
             }
         })
         raiz.setOnTouchListener { _, ev -> gestos.onTouchEvent(ev) }
+        // Pedir al sistema que no use los bordes laterales para sus gestos mientras se ve el reproductor.
+        if (Build.VERSION.SDK_INT >= 29) {
+            raiz.addOnLayoutChangeListener { v, l, t, r, b, _, _, _, _ ->
+                val ancho = r - l
+                val alto = minOf(b - t, dp(200))
+                v.systemGestureExclusionRects = listOf(
+                    android.graphics.Rect(0, 0, dp(48), alto),
+                    android.graphics.Rect(ancho - dp(48), 0, ancho, alto)
+                )
+            }
+        }
         ocultarEn = SystemClock.uptimeMillis() + 4000
     }
 
