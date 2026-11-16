@@ -30,6 +30,7 @@ import android.view.WindowManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -74,7 +75,16 @@ class PlayerActivity : Activity() {
     private var arrastrando = false
     private var capaVisible = true
     private var ocultarEn = 0L
-    private var dialogoArchivos: AlertDialog? = null
+    private lateinit var panelArchivos: LinearLayout
+    private lateinit var listaArchivos: LinearLayout
+    private lateinit var btnAnt: TextView
+    private lateinit var btnSig: TextView
+    private lateinit var btnLista: TextView
+    private var panelAbierto = false
+    private var panelAuto = false
+    private var conservarAlSalir = false
+    /** índice del archivo del torrent → (nombre, estado de guardado) de su fila en el panel lateral. */
+    private val filasArchivos = HashMap<Int, Pair<TextView, TextView>>()
     private var acumVol = 0f
     private val h = Handler(Looper.getMainLooper())
 
@@ -96,7 +106,7 @@ class PlayerActivity : Activity() {
             svc = s
             val p = pendiente
             pendiente = null
-            if (p != null && s.debeAbrir(p.uri)) s.abrir(p)
+            if (p != null) abrirConfirmando(s, p)
             adjuntarSiHaceFalta()
         }
 
@@ -133,7 +143,50 @@ class PlayerActivity : Activity() {
         setIntent(i)
         val p = fuenteDesde(i) ?: return
         val s = svc
-        if (s == null) pendiente = p else if (s.debeAbrir(p.uri)) s.abrir(p)
+        if (s == null) pendiente = p else abrirConfirmando(s, p)
+    }
+
+    /** Abre una fuente nueva; si hay archivos guardándose de un torrent, pregunta antes de cancelarlos. */
+    private fun abrirConfirmando(s: PlaybackService, p: Fuente) {
+        if (s.hayGuardadoPendiente()) {
+            if (s.fuente?.uri == p.uri) return
+            AlertDialog.Builder(this)
+                .setTitle("Hay archivos guardándose")
+                .setMessage("Se están descargando para guardarlos en el dispositivo (" + s.resumenGuardado() +
+                    "). Si abres otra cosa se cancelarán.")
+                .setPositiveButton("Cancelar y abrir") { _, _ -> s.abrir(p) }
+                .setNegativeButton("Seguir guardando", null)
+                .show()
+            return
+        }
+        if (s.debeAbrir(p.uri)) s.abrir(p)
+    }
+
+    /** Salir del reproductor; si quedan archivos por guardar, ofrece seguir en segundo plano. */
+    private fun salir() {
+        val s = svc
+        if (s != null && s.hayGuardadoPendiente()) {
+            AlertDialog.Builder(this)
+                .setTitle("Guardando en el dispositivo")
+                .setMessage("Aún se están descargando archivos para guardar (" + s.resumenGuardado() + ").")
+                .setPositiveButton("Seguir en segundo plano") { _, _ ->
+                    conservarAlSalir = true
+                    finish()
+                }
+                .setNegativeButton("Cancelar descargas y salir") { _, _ ->
+                    conservarAlSalir = false
+                    finish()
+                }
+                .setNeutralButton("Volver", null)
+                .show()
+        } else {
+            finish()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (panelAbierto) cerrarPanel() else salir()
     }
 
     override fun onStart() {
@@ -161,7 +214,10 @@ class PlayerActivity : Activity() {
         h.removeCallbacksAndMessages(null)
         try { unbindService(conexion) } catch (e: Exception) { /* nada */ }
         // Salir con «atrás» detiene la reproducción; ir al escritorio o bloquear NO destruye la actividad.
-        if (isFinishing) svc?.detener()
+        if (isFinishing) {
+            val s = svc
+            if (conservarAlSalir && s != null && s.hayGuardadoPendiente()) s.soloDescarga() else s?.detener()
+        }
         super.onDestroy()
     }
 
@@ -245,12 +301,15 @@ class PlayerActivity : Activity() {
         // Margen lateral: con navegación por gestos (MIUI) los ~30 dp del borde los coge el sistema (gesto «atrás»)
         // y un botón pegado a la esquina no recibe el toque.
         barraSup.setPadding(dp(40), dp(4), dp(40), dp(4))
-        barraSup.addView(boton("✕") { finish() })
+        barraSup.addView(boton("✕") { salir() })
         tituloTv = texto("", 16f)
         tituloTv.gravity = Gravity.START or Gravity.CENTER_VERTICAL
         tituloTv.maxLines = 1
         tituloTv.ellipsize = android.text.TextUtils.TruncateAt.END
         barraSup.addView(tituloTv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        btnLista = boton("☰") { alternarPanel() }
+        btnLista.visibility = View.GONE
+        barraSup.addView(btnLista)
         barraSup.addView(boton("⋮") { menuMas() })
         raiz.addView(barraSup, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
 
@@ -285,10 +344,16 @@ class PlayerActivity : Activity() {
         filaBot.orientation = LinearLayout.HORIZONTAL
         filaBot.gravity = Gravity.CENTER
         fun w(v: View) = filaBot.addView(v, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        btnAnt = boton("⏮") { svc?.anterior() }
+        btnAnt.visibility = View.GONE
+        w(btnAnt)
         w(boton("−10") { svc?.saltar(-10_000) })
         btnPlay = boton("▶") { svc?.alternar() }
         w(btnPlay)
         w(boton("+10") { svc?.saltar(10_000) })
+        btnSig = boton("⏭") { svc?.siguiente() }
+        btnSig.visibility = View.GONE
+        w(btnSig)
         w(boton("CC") { menuSubtitulos() })
         w(boton("Audio") { menuAudio() })
         w(boton("Aspecto") { menuAspecto() })
@@ -307,6 +372,7 @@ class PlayerActivity : Activity() {
         raiz.addView(panelStats, lpStats)
 
         construirSync()
+        construirPanel()
 
         // Gestos sobre el vídeo: un toque muestra/oculta controles, doble toque salta, deslizar = brillo / volumen.
         val gestos = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
@@ -350,6 +416,179 @@ class PlayerActivity : Activity() {
             }
         }
         ocultarEn = SystemClock.uptimeMillis() + 4000
+    }
+
+    // ---------------------------------------------------------------- panel lateral de archivos del torrent
+
+    private fun construirPanel() {
+        panelArchivos = LinearLayout(this)
+        panelArchivos.orientation = LinearLayout.VERTICAL
+        panelArchivos.setBackgroundColor(0xEE111111.toInt())
+        panelArchivos.isClickable = true // se queda los toques: no deben llegar a los gestos del vídeo
+        panelArchivos.setPadding(dp(8), dp(8), dp(40), dp(8))
+        panelArchivos.visibility = View.GONE
+
+        val cab = LinearLayout(this)
+        cab.orientation = LinearLayout.HORIZONTAL
+        cab.gravity = Gravity.CENTER_VERTICAL
+        val tit = texto("Archivos del torrent", 16f)
+        tit.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        cab.addView(tit, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        cab.addView(miniBoton("⬇ Todo") { svc?.let { pedirGuardar(it.archivosTorrent) } })
+        cab.addView(miniBoton("✕") { cerrarPanel() })
+        panelArchivos.addView(cab)
+
+        val sv = ScrollView(this)
+        listaArchivos = LinearLayout(this)
+        listaArchivos.orientation = LinearLayout.VERTICAL
+        sv.addView(listaArchivos)
+        panelArchivos.addView(sv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val ancho = minOf((resources.displayMetrics.widthPixels * 0.85f).toInt(), dp(420))
+        raiz.addView(panelArchivos, FrameLayout.LayoutParams(ancho, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END))
+    }
+
+    private fun alternarPanel() {
+        if (panelAbierto) cerrarPanel() else abrirPanel()
+    }
+
+    private fun abrirPanel() {
+        val s = svc ?: return
+        if (s.archivosTorrent.isEmpty()) return
+        llenarPanel(s)
+        panelArchivos.visibility = View.VISIBLE
+        panelAbierto = true
+        refrescarPanel(s)
+        mostrarCapa()
+    }
+
+    private fun cerrarPanel() {
+        panelArchivos.visibility = View.GONE
+        panelAbierto = false
+    }
+
+    /** Construye las filas una vez al abrir (carpetas y archivos en orden natural); el refresco solo cambia textos. */
+    private fun llenarPanel(s: PlaybackService) {
+        listaArchivos.removeAllViews()
+        filasArchivos.clear()
+        val todos = s.archivosTorrent.sortedWith { x, y -> Utiles.comparaNatural(x.ruta, y.ruta) }
+        // Si todo cuelga de una misma carpeta raíz (lo habitual) no se repite en cada cabecera.
+        val raices = todos.map { it.ruta.substringBefore('/', "") }.distinct()
+        val raizComun = if (raices.size == 1 && raices[0].isNotEmpty() && todos.all { it.ruta.contains('/') }) raices[0] else ""
+        for ((carpeta, archivos) in todos.groupBy { it.ruta.substringBeforeLast('/', "") }) {
+            var nombre = carpeta
+            if (raizComun.isNotEmpty()) nombre = nombre.removePrefix(raizComun).removePrefix("/")
+            if (nombre.isNotEmpty() || todos.size > 1) {
+                val cab = LinearLayout(this)
+                cab.orientation = LinearLayout.HORIZONTAL
+                cab.gravity = Gravity.CENTER_VERTICAL
+                cab.setBackgroundColor(0x33FFFFFF)
+                val t = texto("📁 " + (if (nombre.isEmpty()) "(carpeta principal)" else nombre), 13f)
+                t.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                t.maxLines = 2
+                t.ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                cab.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                cab.addView(miniBoton("⬇") { pedirGuardar(archivos) })
+                val lpc = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                lpc.topMargin = dp(8)
+                listaArchivos.addView(cab, lpc)
+            }
+            for (a in archivos) {
+                val fila = LinearLayout(this)
+                fila.orientation = LinearLayout.HORIZONTAL
+                fila.gravity = Gravity.CENTER_VERTICAL
+                val nom = texto("", 14f)
+                nom.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                nom.setPadding(dp(16), dp(8), dp(8), dp(8))
+                if (a.esReproducible) nom.setOnClickListener { elegirDelPanel(s, a) }
+                val est = miniBoton("⬇") { pedirGuardar(listOf(a)) }
+                fila.addView(nom, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                fila.addView(est)
+                listaArchivos.addView(fila)
+                filasArchivos[a.indice] = Pair(nom, est)
+            }
+        }
+    }
+
+    private fun refrescarPanel(s: PlaybackService) {
+        val actual = s.archivoTorrentActual?.indice ?: -1
+        for (a in s.archivosTorrent) {
+            val par = filasArchivos[a.indice] ?: continue
+            val suena = a.indice == actual
+            par.first.text = (if (suena) "▶ " else "") + a.nombre + "\n" + Utiles.tam(a.tam)
+            par.first.setTextColor(
+                if (suena) 0xFF4FC3F7.toInt() else if (a.esReproducible) Color.WHITE else 0xFF999999.toInt()
+            )
+            par.second.text = when (s.estadoGuardado(a)) {
+                0 -> "⬇ " + s.motor.progresoArchivo(a) + " %"
+                1 -> "copiando…"
+                2 -> "✓ guardado"
+                -1 -> "⚠ reintentar"
+                else -> "⬇"
+            }
+        }
+    }
+
+    private fun elegirDelPanel(s: PlaybackService, a: ArchivoTorrent) {
+        if (s.archivoTorrentActual?.indice != a.indice || s.mp == null) s.elegirArchivoTorrent(a.indice)
+        cerrarPanel()
+    }
+
+    /** Marca archivos para guardarlos en el dispositivo (o quita la marca si ya estaba y aún no se ha copiado). */
+    private fun pedirGuardar(lista: List<ArchivoTorrent>) {
+        val s = svc ?: return
+        if (lista.size == 1) {
+            val a = lista[0]
+            when (s.estadoGuardado(a)) {
+                0 -> {
+                    s.guardarArchivos(lista, false)
+                    aviso("Guardado cancelado")
+                    return
+                }
+                1 -> {
+                    aviso("Copiándose a Descargas…")
+                    return
+                }
+                2 -> {
+                    aviso("Ya está guardado en " + Exportar.destinoTexto())
+                    return
+                }
+                -1 -> aviso("Error: " + (s.motor.errorGuardado[a.indice] ?: "desconocido") + " · reintentando")
+            }
+        }
+        val nuevos = lista.filter { val e = s.estadoGuardado(it); e == -2 || e == -1 }
+        if (nuevos.isEmpty()) {
+            aviso("Ya marcados")
+            return
+        }
+        val bytes = nuevos.sumOf { it.tam }
+        val necesario = bytes * 2
+        val libre = s.espacioLibre()
+        val hacer = { s.guardarArchivos(nuevos, true); aviso("Guardando " + nuevos.size + " archivo(s)…") }
+        val pocoEspacio = libre < necesario + 200L * 1024 * 1024
+        if (pocoEspacio) {
+            AlertDialog.Builder(this)
+                .setTitle("Poco espacio libre")
+                .setMessage(
+                    "Guardar " + nuevos.size + " archivo(s) (" + Utiles.tam(bytes) + ") necesita unos " + Utiles.tam(necesario) +
+                        " libres mientras se hace (la descarga temporal y la copia final), y ahora hay " + Utiles.tam(libre) + "."
+                )
+                .setPositiveButton("Intentar igualmente") { _, _ -> hacer() }
+                .setNegativeButton("Cancelar", null)
+                .show()
+        } else if (nuevos.size > 1) {
+            AlertDialog.Builder(this)
+                .setTitle("Guardar en el dispositivo")
+                .setMessage(
+                    nuevos.size.toString() + " archivos (" + Utiles.tam(bytes) + ") irán a " + Exportar.destinoTexto() +
+                        ", con las mismas carpetas del torrent."
+                )
+                .setPositiveButton("Guardar") { _, _ -> hacer() }
+                .setNegativeButton("Cancelar", null)
+                .show()
+        } else {
+            hacer()
+        }
     }
 
     // ---------------------------------------------------------------- sincronización de subtítulos
@@ -581,7 +820,22 @@ class PlayerActivity : Activity() {
             aviso(av)
         }
 
-        if (s.necesitaElegir && dialogoArchivos == null) mostrarArchivosTorrent()
+        val conLista = s.hayLista
+        btnAnt.visibility = if (conLista) View.VISIBLE else View.GONE
+        btnSig.visibility = if (conLista) View.VISIBLE else View.GONE
+        btnLista.visibility = if (s.esTorrent && s.archivosTorrent.isNotEmpty()) View.VISIBLE else View.GONE
+
+        // El panel de archivos se abre solo cuando hay que elegir, o al volver con descargas en curso sin reproducir.
+        val debeElegir = s.necesitaElegir || (s.mp == null && s.hayGuardadoPendiente() && s.archivosTorrent.isNotEmpty())
+        if (debeElegir) {
+            if (!panelAuto) {
+                panelAuto = true
+                abrirPanel()
+            }
+        } else {
+            panelAuto = false
+        }
+        if (panelAbierto) refrescarPanel(s)
 
         if (s.fin || s.error != null) {
             if (!capaVisible) mostrarCapa()
@@ -618,14 +872,21 @@ class PlayerActivity : Activity() {
                 s.mp?.setAudioDelay(ms * 1000L)
             }
         }
-        if (s.esTorrent && s.archivosTorrent.size > 1) {
-            etiquetas.add("Archivos del torrent"); acciones.add { mostrarArchivosTorrent() }
+        if (s.esTorrent && s.archivosTorrent.isNotEmpty()) {
+            etiquetas.add("Archivos del torrent"); acciones.add { abrirPanel() }
+            val actual = s.archivoTorrentActual
+            if (actual != null) {
+                etiquetas.add("Guardar este archivo en el dispositivo"); acciones.add { pedirGuardar(listOf(actual)) }
+            }
+            if (s.archivosTorrent.size > 1) {
+                etiquetas.add("Guardar todo el torrent"); acciones.add { pedirGuardar(s.archivosTorrent) }
+            }
         }
         if (Build.VERSION.SDK_INT >= 26) {
             etiquetas.add("Imagen en imagen"); acciones.add { entrarPip() }
         }
         etiquetas.add("Ajustes"); acciones.add { startActivity(Intent(this, AjustesActivity::class.java)) }
-        etiquetas.add("Cerrar reproductor"); acciones.add { finish() }
+        etiquetas.add("Cerrar reproductor"); acciones.add { salir() }
         lista("Opciones", etiquetas) { acciones[it]() }
     }
 
@@ -698,22 +959,6 @@ class PlayerActivity : Activity() {
             }
         }
         lista("Subtítulos", etiquetas) { acciones[it]() }
-    }
-
-    private fun mostrarArchivosTorrent() {
-        val s = svc ?: return
-        val archivos = s.archivosTorrent
-        if (archivos.isEmpty()) return
-        val orden = archivos.sortedBy { it.ruta }
-        val d = AlertDialog.Builder(this)
-            .setTitle("Archivos del torrent")
-            .setItems(orden.map { it.nombre + "  (" + Utiles.tam(it.tam) + ")" }.toTypedArray()) { _, i ->
-                s.elegirArchivoTorrent(orden[i].indice)
-            }
-            .setOnDismissListener { dialogoArchivos = null }
-            .create()
-        dialogoArchivos = d
-        d.show()
     }
 
     @Suppress("DEPRECATION")
