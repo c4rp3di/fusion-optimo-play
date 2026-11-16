@@ -468,6 +468,9 @@ class PlaybackService : Service() {
 
     // ---------------------------------------------------------------- subtitulos
 
+    /** Último archivo de subtítulos externo/descargado cargado (para sincronizar por líneas). */
+    fun archivoSubsActual(): File? = subsExternas.lastOrNull()
+
     fun anadirSubtitulo(f: File) {
         val m = mp ?: return
         subsExternas.add(f)
