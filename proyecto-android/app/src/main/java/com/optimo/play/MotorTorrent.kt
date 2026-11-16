@@ -7,6 +7,7 @@ import org.libtorrent4j.TorrentFlags
 import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
 import org.libtorrent4j.Sha1Hash
+import org.libtorrent4j.swig.sha1_hash
 import java.io.File
 import java.io.IOException
 
@@ -84,6 +85,56 @@ class MotorTorrent(private val ctx: Context) {
         return s
     }
 
+    /**
+     * Construye un Sha1Hash a partir de 20 bytes. La API pública cambia entre versiones de libtorrent4j
+     * (en la 2.1 no hay constructor desde byte[]), así que se prueban varias vías por reflexión.
+     */
+    private fun sha1DeBytes(bytes: ByteArray): Sha1Hash {
+        val hex = bytes.joinToString("") { "%02x".format(it) }
+        val fallos = StringBuilder()
+        // 1) Sha1Hash.parseHex(String)
+        try {
+            val m = Sha1Hash::class.java.getMethod("parseHex", String::class.java)
+            return m.invoke(null, hex) as Sha1Hash
+        } catch (e: Exception) {
+            fallos.append("parseHex ")
+        }
+        // 2) El tipo interno sha1_hash: constructor desde String, desde byte_vector, o from_hex()
+        var sw: Any? = null
+        try {
+            val cls = Class.forName("org.libtorrent4j.swig.sha1_hash")
+            try {
+                sw = cls.getConstructor(String::class.java).newInstance(hex)
+            } catch (e: Exception) {
+                fallos.append("sha1_hash(String) ")
+            }
+            if (sw == null) {
+                try {
+                    val vecCls = Class.forName("org.libtorrent4j.swig.byte_vector")
+                    val vec = Class.forName("org.libtorrent4j.Vectors")
+                        .getMethod("bytes2byte_vector", ByteArray::class.java).invoke(null, bytes)
+                    sw = cls.getConstructor(vecCls).newInstance(vec)
+                } catch (e: Exception) {
+                    fallos.append("sha1_hash(byte_vector) ")
+                }
+            }
+            if (sw == null) {
+                try {
+                    val o = cls.getConstructor().newInstance()
+                    cls.getMethod("from_hex", String::class.java).invoke(o, hex)
+                    sw = o
+                } catch (e: Exception) {
+                    fallos.append("from_hex ")
+                }
+            }
+        } catch (e: Exception) {
+            fallos.append("sin clase sha1_hash ")
+        }
+        if (sw is sha1_hash) return Sha1Hash(sw)
+        val disponibles = Sha1Hash::class.java.methods.map { it.name }.distinct().sorted().joinToString(",")
+        throw IOException("No se pudo calcular el info-hash ($fallos). Métodos de Sha1Hash: $disponibles")
+    }
+
     /** Extrae el info-hash (20 bytes) de un enlace magnet: btih en hexadecimal (40) o base32 (32). */
     private fun hashDeMagnet(magnet: String): ByteArray {
         val m = Regex("xt=urn:btih:([A-Za-z0-9]+)", RegexOption.IGNORE_CASE).find(magnet)
@@ -135,7 +186,7 @@ class MotorTorrent(private val ctx: Context) {
             hash = ti0.infoHash()
             s.download(ti0, d)
         } else {
-            hash = Sha1Hash(hashDeMagnet(origen))
+            hash = sha1DeBytes(hashDeMagnet(origen))
             s.download(origen, d, TorrentFlags.SEQUENTIAL_DOWNLOAD)
         }
         var h: TorrentHandle? = null
