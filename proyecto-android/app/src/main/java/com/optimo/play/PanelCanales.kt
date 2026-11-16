@@ -34,7 +34,7 @@ class PanelCanales(
     val vista = LinearLayout(act)
     private val buscador = EditText(act)
     private val lista = ListView(act)
-    private val btnFav: TextView
+    private lateinit var btnFav: TextView
 
     private var todos: List<Canal> = emptyList()
     private var claves: List<String> = emptyList()
