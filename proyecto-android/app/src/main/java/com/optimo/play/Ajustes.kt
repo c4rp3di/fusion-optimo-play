@@ -180,6 +180,25 @@ class Ajustes(ctx: Context) {
         sp.edit().remove("recientes").apply()
     }
 
+    // ---------------------------------------------------------------- listas de canales
+
+    /** Canales marcados con ★ (clave estable: id + nombre). */
+    val favoritos: Set<String>
+        get() = HashSet(sp.getStringSet("favs", null) ?: emptySet<String>())
+
+    fun alternarFavorito(clave: String) {
+        val f = HashSet(favoritos)
+        if (!f.add(clave)) f.remove(clave)
+        sp.edit().putStringSet("favs", f).apply()
+    }
+
+    /** URL de la guía (XMLTV) puesta a mano para una lista. Vacío = la que indique la propia lista. */
+    fun guiaDe(lista: String): String = leerSeguro("guia_" + Integer.toHexString(lista.hashCode()))
+
+    fun fijarGuia(lista: String, url: String) {
+        escribirSeguro("guia_" + Integer.toHexString(lista.hashCode()), url.trim())
+    }
+
     // ---------------------------------------------------------------- cifrado
 
     private fun leerSeguro(clave: String): String {
