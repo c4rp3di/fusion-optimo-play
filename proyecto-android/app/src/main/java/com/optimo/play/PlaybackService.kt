@@ -100,6 +100,21 @@ class PlaybackService : Service() {
     @Volatile private var objetivoTorrent: ArchivoTorrent? = null
     private var memoOrigen: List<ArchivoTorrent>? = null
     private var memoLista: List<ArchivoTorrent> = emptyList()
+    // ---- lista de canales (M3U)
+    @Volatile var canales: List<Canal> = emptyList()
+        private set
+    @Volatile var canalActual: Int = -1
+        private set
+    @Volatile var necesitaElegirCanal: Boolean = false
+    @Volatile var guia: Guia? = null
+        private set
+    @Volatile var estadoGuia: String = ""
+        private set
+    @Volatile private var urlGuiaCabecera: String? = null
+    private var fuenteActiva: Fuente? = null
+    private val idSesion = java.util.UUID.randomUUID().toString()
+    val hayCanales: Boolean get() = canales.isNotEmpty()
+    val canalActivo: Canal? get() = canales.getOrNull(canalActual)
     private val candadoGuardado = Any()
     private var hiloGuardado: Thread? = null
     private var genGuardado = -1
@@ -191,6 +206,12 @@ class PlaybackService : Service() {
         estado = ""
         ultimoEvento = ""
         objetivoTorrent = null
+        canales = emptyList()
+        canalActual = -1
+        necesitaElegirCanal = false
+        guia = null
+        estadoGuia = ""
+        urlGuiaCabecera = null
         necesitaElegir = false
         archivosTorrent = emptyList()
         subsExternas.clear()
@@ -210,10 +231,130 @@ class PlaybackService : Service() {
         crearReproductor()
         if (esTorrent) {
             abrirTorrent(f)
+        } else if (puedeSerLista(f.uri)) {
+            abrirPosibleLista(f)
         } else {
             reproducir(f.uri, f)
         }
     }
+
+    // ---------------------------------------------------------------- listas de canales (M3U)
+
+    private fun puedeSerLista(uri: String): Boolean {
+        val u = uri.lowercase()
+        if (u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file:")) {
+            val r = u.substringBefore('?').substringBefore('#')
+            return r.endsWith(".m3u") || r.endsWith(".m3u8")
+        }
+        if (u.startsWith("content:")) {
+            val tipo = try { contentResolver.getType(Uri.parse(uri)) ?: "" } catch (e: Exception) { "" }
+            if (tipo.contains("mpegurl", true)) return true
+            val n = Utiles.nombreDe(this, uri).lowercase()
+            return n.endsWith(".m3u") || n.endsWith(".m3u8")
+        }
+        return false
+    }
+
+    /**
+     * Una URL .m3u/.m3u8 puede ser un solo vídeo HLS o una lista de canales. Se lee y se decide por el contenido:
+     * lista → se muestra el panel de canales; si no (o si no se puede leer) → se le pasa tal cual a libVLC.
+     */
+    private fun abrirPosibleLista(f: Fuente) {
+        estado = "Leyendo…"
+        Thread {
+            var lista: ListaM3u? = null
+            try {
+                val txt = ListaM3u.leer(this, f)
+                if (txt != null && ListaM3u.esLista(txt)) lista = ListaM3u.parsear(txt)
+            } catch (e: Exception) {
+                // Si no se puede leer aquí, se intenta con libVLC igualmente.
+            }
+            main.post {
+                if (fuente !== f) return@post // se abrió otra cosa mientras tanto
+                estado = ""
+                val l = lista
+                if (l != null && l.canales.isNotEmpty()) {
+                    canales = l.canales
+                    urlGuiaCabecera = l.urlGuia
+                    titulo = f.titulo
+                    necesitaElegirCanal = true
+                    estado = "Elige un canal (" + l.canales.size + ")"
+                    iniciarGuia(f)
+                } else {
+                    reproducir(f.uri, f)
+                }
+            }
+        }.start()
+    }
+
+    /** Pone el canal número [i] de la lista (índice dentro de [canales]). */
+    fun elegirCanal(i: Int) {
+        val lista = canales
+        if (i !in lista.indices) return
+        val lf = fuente ?: return
+        val c = lista[i]
+        necesitaElegirCanal = false
+        canalActual = i
+        error = null
+        fin = false
+        estado = ""
+        ultimoEvento = ""
+        titulo = c.nombre
+        claveRep = "" // un directo no tiene posición que recordar
+        posReanudar = 0L
+        subsExternas.clear()
+        retardoSubs = 0L
+        if (c.drm) avisoUi = "Este canal usa DRM: puede que no se reproduzca"
+        val ua = c.ua ?: lf.ua ?: Utiles.UA_MOVIL
+        val url = Utiles.resolverMarcas(c.url, ua, idSesion)
+        crearReproductor()
+        reproducir(url, Fuente(url, c.nombre, c.referer ?: lf.referer, ua))
+    }
+
+    // ---- guía de programación
+
+    private fun iniciarGuia(f: Fuente) {
+        val manual = ajustes.guiaDe(f.uri)
+        val url = if (manual.isNotEmpty()) manual else (urlGuiaCabecera ?: "")
+        if (url.isEmpty()) {
+            guia = null
+            estadoGuia = "Esta lista no indica ninguna guía de programación. Si tienes la dirección de una (XMLTV, .xml o .xml.gz), puedes ponerla a mano."
+            return
+        }
+        cargarGuia(url)
+    }
+
+    private fun cargarGuia(url: String) {
+        val lista = fuente?.uri
+        estadoGuia = "Descargando la guía…"
+        guia = null
+        Thread {
+            try {
+                val g = Guia.cargar(this, url)
+                main.post {
+                    if (fuente?.uri != lista) return@post
+                    guia = g
+                    val con = canales.count { g.de(it).isNotEmpty() }
+                    estadoGuia = "Guía cargada: " + g.canalesConProgramas + " canales en la guía, " + con + " de " + canales.size +
+                        " canales de la lista con programación."
+                }
+            } catch (e: Exception) {
+                main.post {
+                    if (fuente?.uri == lista) estadoGuia = "No se pudo cargar la guía: " + (e.message ?: e.javaClass.simpleName)
+                }
+            }
+        }.start()
+    }
+
+    /** Guía puesta a mano para esta lista (vacía = usar la que indique la lista). */
+    fun fijarGuiaManual(url: String) {
+        val f = fuente ?: return
+        ajustes.fijarGuia(f.uri, url)
+        iniciarGuia(f)
+    }
+
+    /** Dirección de guía que anuncia la propia lista, si la hay. */
+    fun guiaDeLaLista(): String? = urlGuiaCabecera
 
     private fun esContenidoTorrent(uri: String): Boolean {
         return try {
@@ -260,6 +401,7 @@ class PlaybackService : Service() {
         val m = mp ?: return
         val v = libvlc ?: return
         inicioHecho = false
+        fuenteActiva = f
         ultimaUrl = url
         cerrarPfd()
         val uri = Uri.parse(url)
@@ -538,7 +680,7 @@ class PlaybackService : Service() {
     fun reconstruir() {
         val m = mp ?: return
         val t = m.time
-        val f = fuente ?: return
+        val f = fuenteActiva ?: fuente ?: return
         val url = ultimaUrl ?: return
         crearReproductor()
         posReanudar = t
@@ -560,7 +702,7 @@ class PlaybackService : Service() {
         return memoLista
     }
 
-    val hayLista: Boolean get() = esTorrent && listaReproducible().size > 1
+    val hayLista: Boolean get() = canales.size > 1 || (esTorrent && listaReproducible().size > 1)
 
     private fun posicionEnLista(l: List<ArchivoTorrent>): Int {
         val c = objetivoTorrent ?: archivoTorrentActual ?: return -1
@@ -573,9 +715,14 @@ class PlaybackService : Service() {
         return if (i >= 0 && i < l.size - 1) l[i + 1] else null
     }
 
-    fun haySiguiente(): Boolean = esTorrent && siguienteEnLista() != null
+    fun haySiguiente(): Boolean = canales.size > 1 || (esTorrent && siguienteEnLista() != null)
 
     fun siguiente(): Boolean {
+        val n = canales.size
+        if (n > 1) {
+            elegirCanal((maxOf(canalActual, -1) + 1) % n)
+            return true
+        }
         val s = siguienteEnLista() ?: return false
         elegirArchivoTorrent(s.indice)
         return true
@@ -583,6 +730,11 @@ class PlaybackService : Service() {
 
     /** Si ya llevas más de 5 s vuelve al principio del archivo; si no, va al anterior. */
     fun anterior() {
+        val n = canales.size
+        if (n > 1) {
+            elegirCanal(if (canalActual <= 0) n - 1 else canalActual - 1)
+            return
+        }
         val l = listaReproducible()
         val i = posicionEnLista(l)
         val m = mp
