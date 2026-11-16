@@ -48,3 +48,19 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
   decodificación, pistas (códec, resolución, fps, canales, bitrate, idioma) y, para URLs de red, un sondeo HTTP sin cookies (código, tipo, rangos, redirecciones;
   avisa si el servidor devuelve una página web en vez de un vídeo). El botón «Copiar» sirve para pegarlo aquí sin logcat. Las pistas se leen por reflexión.
 - **Reabrir la misma URL:** si la anterior falló, terminó o no llegó a sonar, reenviar la misma URL desde Optimo vuelve a intentarlo.
+
+## 0.3.0 — Torrents con varios archivos y guardar en el dispositivo
+
+- **⏮ / ⏭** en la barra inferior (aparecen si el torrent tiene más de un vídeo o audio): siguiente y anterior archivo, en orden natural
+  (CD2 antes que CD10). ⏮ vuelve al principio si llevas más de 5 s. Al terminar un archivo pasa solo al siguiente.
+  También responden los botones de siguiente/anterior de auriculares y de la pantalla de bloqueo.
+- **Panel lateral ☰** (arriba, junto a ⋮): todo el torrent agrupado por carpetas. Toca un archivo para reproducirlo; marca el que suena.
+  Se abre solo cuando hay que elegir. Incluye archivos que no son multimedia (portadas, PDF…) solo para guardarlos.
+- **Guardar en el dispositivo:** ⬇ por archivo, por carpeta o «⬇ Todo» (también en ⋮). Se descarga completo, aunque no lo estés viendo, y al terminar
+  se copia a *Descargas/OptimoPlay/…* conservando las carpetas del torrent (Android 10+ sin permisos; en Android 9, a la carpeta
+  propia de la app). Estados en el panel: ⬇ %, copiando…, ✓ guardado, ⚠ reintentar.
+- **Segundo plano:** al salir con descargas pendientes se ofrece «Seguir en segundo plano»; la notificación muestra el progreso y el servicio se
+  cierra solo al acabar. Abrir otra fuente con descargas en curso pregunta antes de cancelarlas.
+- **Espacio:** mientras se guarda, cada archivo ocupa el doble (descarga temporal en la caché + copia final), y se avisa si no hay sitio.
+  Lo descargado en la caché se sigue borrando al cerrar; lo guardado en Descargas queda.
+- Solo un torrent a la vez.
