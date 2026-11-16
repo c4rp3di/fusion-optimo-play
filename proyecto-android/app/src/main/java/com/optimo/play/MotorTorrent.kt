@@ -55,6 +55,39 @@ class MotorTorrent(private val ctx: Context) {
         }
     }
 
+    private val cachePrio = HashMap<Int, Priority>()
+
+    /**
+     * Prioridad de libtorrent por su valor numérico (0 ignorar, 4 normal, 7 máxima).
+     * Se busca por reflexión porque los nombres de las constantes cambian entre versiones de libtorrent4j.
+     */
+    @Synchronized
+    private fun prio(valor: Int): Priority {
+        cachePrio[valor]?.let { return it }
+        var mejor: Priority? = null
+        var dif = Int.MAX_VALUE
+        var cualquiera: Priority? = null
+        for (f in Priority::class.java.fields) {
+            if (!java.lang.reflect.Modifier.isStatic(f.modifiers) || f.type != Priority::class.java) continue
+            val p = f.get(null) as? Priority ?: continue
+            if (f.name != "IGNORE") cualquiera = p
+            val n: Int = try {
+                (Priority::class.java.getMethod("swig").invoke(p) as Number).toInt()
+            } catch (e: Exception) {
+                -1
+            }
+            if (n < 0) continue
+            val d = Math.abs(n - valor)
+            if (d < dif) {
+                dif = d
+                mejor = p
+            }
+        }
+        val r = mejor ?: cualquiera ?: Priority.IGNORE
+        cachePrio[valor] = r
+        return r
+    }
+
     @Synchronized
     private fun sesion(): SessionManager {
         var s = sm
@@ -125,7 +158,7 @@ class MotorTorrent(private val ctx: Context) {
         archivo = a
         val n = ti.files().numFiles()
         for (i in 0 until n) {
-            h.filePriority(i, if (i == a.indice) Priority.NORMAL else Priority.IGNORE)
+            h.filePriority(i, if (i == a.indice) prio(4) else Priority.IGNORE)
         }
         val pl = ti.pieceLength().toLong()
         val primera = (a.offset / pl).toInt()
@@ -134,12 +167,12 @@ class MotorTorrent(private val ctx: Context) {
         piezasCabeza = ((4L * 1024 * 1024 + pl - 1) / pl).toInt().coerceIn(1, total)
         piezasCola = ((1536L * 1024 + pl - 1) / pl).toInt().coerceIn(1, total)
         for (k in 0 until piezasCabeza) {
-            h.piecePriority(primera + k, Priority.SEVEN)
+            h.piecePriority(primera + k, prio(7))
             h.setPieceDeadline(primera + k, 500 + k * 250)
         }
         for (k in 0 until piezasCola) {
             val p = ultima - k
-            h.piecePriority(p, Priority.SEVEN)
+            h.piecePriority(p, prio(7))
             h.setPieceDeadline(p, 3000 + k * 250)
         }
     }
