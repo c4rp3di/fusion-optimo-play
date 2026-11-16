@@ -38,3 +38,13 @@ Este código no se pudo compilar en el entorno donde se escribió. Las dependenc
 - Cookies de la página no se pasan (solo Referer y User-Agent).
 - Lo descargado de un torrent vive en la caché y se borra al cerrar.
 - MIUI: batería «Sin restricciones» e inicio automático, o cierra la reproducción al bloquear.
+
+## 0.2.1 — Diagnóstico y reapertura
+
+Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no puede abrir) la pantalla se quedaba solo con el título, sin error.
+- **Aviso a los 12 s:** si libVLC no llega a reproducir y no hay error, se muestra el último evento de libVLC y la URL, con la pista de abrir «Información».
+  Si después empieza a sonar, el aviso desaparece.
+- **⋮ › Información** (para URLs, archivos locales, manifiestos y torrents): tipo de fuente, URI recibida, cabeceras, estado de libVLC, posición, búfer,
+  decodificación, pistas (códec, resolución, fps, canales, bitrate, idioma) y, para URLs de red, un sondeo HTTP sin cookies (código, tipo, rangos, redirecciones;
+  avisa si el servidor devuelve una página web en vez de un vídeo). El botón «Copiar» sirve para pegarlo aquí sin logcat. Las pistas se leen por reflexión.
+- **Reabrir la misma URL:** si la anterior falló, terminó o no llegó a sonar, reenviar la misma URL desde Optimo vuelve a intentarlo.
