@@ -247,7 +247,11 @@ class PlaybackService : Service() {
         } else {
             media = Media(v, uri)
         }
-        media.setHWDecoderEnabled(true, false)
+        when (ajustes.decodificacion) {
+            1 -> media.setHWDecoderEnabled(false, false)
+            2 -> media.setHWDecoderEnabled(true, true)
+            else -> media.setHWDecoderEnabled(true, false)
+        }
         if (uri.scheme == "http" || uri.scheme == "https") {
             media.addOption(":network-caching=2500")
             f.referer?.let { media.addOption(":http-referrer=$it") }
