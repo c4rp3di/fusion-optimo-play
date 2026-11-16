@@ -96,7 +96,7 @@ class PlayerActivity : Activity() {
             svc = s
             val p = pendiente
             pendiente = null
-            if (p != null && s.fuente?.uri != p.uri) s.abrir(p)
+            if (p != null && s.debeAbrir(p.uri)) s.abrir(p)
             adjuntarSiHaceFalta()
         }
 
@@ -133,7 +133,7 @@ class PlayerActivity : Activity() {
         setIntent(i)
         val p = fuenteDesde(i) ?: return
         val s = svc
-        if (s == null) pendiente = p else if (s.fuente?.uri != p.uri) s.abrir(p)
+        if (s == null) pendiente = p else if (s.debeAbrir(p.uri)) s.abrir(p)
     }
 
     override fun onStart() {
@@ -603,6 +603,7 @@ class PlayerActivity : Activity() {
         val s = svc ?: return
         val etiquetas = ArrayList<String>()
         val acciones = ArrayList<() -> Unit>()
+        etiquetas.add("Información"); acciones.add { Informacion.mostrar(this, s) }
         etiquetas.add("Velocidad"); acciones.add { menuVelocidad() }
         etiquetas.add("Decodificación de vídeo"); acciones.add { menuDecodificacion() }
         if (s.esTorrent) {
