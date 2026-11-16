@@ -108,6 +108,38 @@ object Utiles {
         }
     }
 
+    /**
+     * Instantes de inicio (ms) de cada línea de un archivo de subtítulos SRT/VTT/ASS, sin tener en cuenta
+     * el desfase. Sirve para saltar de diálogo en diálogo al sincronizar.
+     */
+    fun tiemposSubs(f: java.io.File): List<Long> {
+        val salida = ArrayList<Long>()
+        try {
+            val txt = String(f.readBytes(), Charsets.ISO_8859_1) // los tiempos son ASCII: vale cualquier codificación
+            val srt = Regex("(?:(\\d+):)?(\\d{1,2}):(\\d{2})[,.](\\d{1,3})\\s*-->")
+            for (m in srt.findAll(txt)) {
+                val h = m.groupValues[1].toLongOrNull() ?: 0L
+                val mi = m.groupValues[2].toLong()
+                val s = m.groupValues[3].toLong()
+                val ms = m.groupValues[4].padEnd(3, '0').toLong()
+                salida.add(((h * 60 + mi) * 60 + s) * 1000 + ms)
+            }
+            if (salida.isEmpty()) {
+                val ass = Regex("(?m)^Dialogue:\\s*[^,]*,(\\d+):(\\d{2}):(\\d{2})[.](\\d{2})")
+                for (m in ass.findAll(txt)) {
+                    val h = m.groupValues[1].toLong()
+                    val mi = m.groupValues[2].toLong()
+                    val s = m.groupValues[3].toLong()
+                    val cs = m.groupValues[4].toLong()
+                    salida.add(((h * 60 + mi) * 60 + s) * 1000 + cs * 10)
+                }
+            }
+        } catch (e: Exception) {
+            // Sin lista: la sincronización por líneas no estará disponible.
+        }
+        return salida.sorted().distinct()
+    }
+
     fun fmt(ms: Long): String {
         if (ms <= 0) return "0:00"
         val s = ms / 1000
