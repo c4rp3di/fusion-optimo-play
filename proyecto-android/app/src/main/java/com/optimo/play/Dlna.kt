@@ -185,7 +185,7 @@ object Dlna {
                         "<item id=\"0\" parentID=\"-1\" restricted=\"1\"><dc:title>" + escapar(titulo) + "</dc:title>" +
                         "<upnp:class>" + (if (mime.startsWith("audio")) "object.item.audioItem" else "object.item.videoItem") +
                         "</upnp:class><res protocolInfo=\"http-get:*:" + dlnaMime +
-                        ":DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\">" +
+                        ":DLNA.ORG_OP=" + (if (directo) "00" else "01") + ";DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\">" +
                         escapar(url) + "</res>" +
                         (if (subs != null) "<res protocolInfo=\"http-get:*:text/srt:*\">" + escapar(subs) + "</res>" +
                             "<sec:CaptionInfoEx sec:type=\"srt\">" + escapar(subs) + "</sec:CaptionInfoEx>" +
