@@ -83,3 +83,15 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 ## 0.4.1
 
 - Corrige un error de compilación en el panel de canales (`btnFav` usado en su propio inicializador).
+
+## 0.5.0
+
+- **Vertical**: el reproductor ya gira. En Ajustes (y en ⋮ › Orientación) eliges automática (respeta el bloqueo de rotación), siempre horizontal o siempre vertical. En vertical los botones pasan a dos filas y se respeta la muesca de la pantalla.
+- **Listas .m3u/.m3u8 locales** (típico de un disco): si sus entradas son archivos, se reproducen como cola. Se buscan junto a la lista; la primera vez se pide acceso a esa carpeta (selector de carpetas, se recuerda; sin permisos de almacenamiento). Admite rutas relativas, `..`, `%20`, rutas de Windows y codificación Windows-1252.
+- **Cola de reproducción** (solo archivos locales; no torrents ni canales): panel ☰ con pista actual, saltar, subir/bajar, quitar, «a continuación», aleatorio, repetir (todo / una) y vaciar. Una pista rota se salta sola. Con solo audio los controles no se ocultan.
+- **Carpetas** (pantalla de inicio): añade varias carpetas, navega, reproduce una carpeta (con o sin subcarpetas), un archivo con el resto de su carpeta en cola, o una lista .m3u. «Varios archivos» elige varios a la vez.
+- Al abrir un audio de una carpeta con acceso concedido se pone en cola el resto de audios (se desactiva en Ajustes). Desde ⋮ › «Poner en cola el resto de la carpeta…» se pide el acceso si falta.
+- **Mis listas**: guarda listas M3U/M3U8 dentro de la app (desde una dirección o un archivo, o desde ⋮ › «Guardar esta lista en la app» al verla). Cifradas, se pueden actualizar desde su dirección, renombrar, copiar a Descargas/OptimoPlay/Listas y borrar.
+- **Torrents sin duplicados**: lo que ya está en Descargas/OptimoPlay (misma ruta y tamaño) se marca «✓ guardado» y no se vuelve a bajar; al copiar se sustituye en vez de crear «nombre (1)».
+- **Descargas**: gestiona lo guardado de torrents (por carpetas): reproducir, borrar archivo o carpeta, y borrar de una vez las copias «(1)» sobrantes de versiones anteriores. Límite de Android 10+: tras reinstalar, la app no ve lo guardado por la instalación anterior.
+- **Gestor de archivos propio** (`com.carpe.gestorarchivos`): si está instalado, todo lo de elegir archivos y carpetas (abrir archivo, varios archivos, carpetas con acceso, importar listas, subtítulos) se pide directamente a él en vez de al selector del sistema (desactivable en Ajustes). Como el gestor adivina el tipo por la extensión y no conoce `.m3u`/`.torrent`, con él no se manda filtro de tipos. «Descargas» tiene un botón para ver la carpeta de OptimoPlay en el gestor.
