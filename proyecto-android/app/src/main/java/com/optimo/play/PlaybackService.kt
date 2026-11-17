@@ -1118,9 +1118,10 @@ class PlaybackService : Service() {
     @Volatile var destinoEmision: Destino? = null
         private set
     private var lan: ServidorLan? = null
+    private var enviarPausaLocal = false
 
     /** Manda lo que suena a una tele. El móvil se queda sirviendo el archivo si es del torrent o del dispositivo. */
-    fun emitirA(d: Destino) {
+    fun emitirA(d: Destino, posForzada: Long = -1L) {
         val f = fuenteActiva ?: fuente
         val url0 = ultimaUrl
         if (f == null || url0 == null) {
@@ -1128,11 +1129,14 @@ class PlaybackService : Service() {
             return
         }
         val m = mp
-        val pos = try { m?.time ?: 0L } catch (e: Throwable) { 0L }
+        val pos = if (posForzada >= 0L) posForzada else try { m?.time ?: 0L } catch (e: Throwable) { 0L }
         val len = try { m?.length ?: 0L } catch (e: Throwable) { 0L }
         val directo = len <= 0L
-        volverALocal(false)
-        val srv = ServidorLan(this) { motor }
+        // Si ya se emitía a esta misma pantalla (p. ej. llegaron subtítulos), se reutiliza la conexión.
+        val previo = emisor
+        val reutilizar = previo != null && lan != null && destinoEmision?.id == d.id && destinoEmision?.tipo == d.tipo
+        if (!reutilizar) volverALocal(false)
+        val srv = if (reutilizar) lan!! else ServidorLan(this) { motor }
         var url: String? = null
         var mime = "video/mp4"
         val ta = archivoTorrentActual
@@ -1161,7 +1165,16 @@ class PlaybackService : Service() {
             avisoUi = "No se pudo enviar: el móvil no está conectado a una red Wi-Fi"
             return
         }
-        val e: Emisor = try {
+        // Subtítulos: el último archivo externo cargado, convertido al formato que entiende cada tele.
+        var urlSubs: String? = null
+        val fs = archivoSubsActual()
+        if (fs != null) {
+            val prep = Subs.preparar(fs, retardoSubs / 1000L, d.tipo == Destino.CHROMECAST)
+            if (prep != null) urlSubs = srv.urlTexto(prep.bytes, prep.ext, prep.mime)
+            else avisoUi = "Estos subtítulos (" + fs.name.substringAfterLast('.') + ") no se pueden enviar a la tele; solo SRT o WebVTT"
+        }
+        srv.subCabecera = if (d.tipo == Destino.DLNA) urlSubs else null
+        val e: Emisor = if (reutilizar) previo!! else try {
             if (d.tipo == Destino.DLNA) Dlna.EmisorDlna(d.datos as DlnaDispositivo)
             else CastGoogle.EmisorCast(applicationContext, d.datos as androidx.mediarouter.media.MediaRouter.RouteInfo)
         } catch (t: Throwable) {
@@ -1172,10 +1185,11 @@ class PlaybackService : Service() {
         lan = srv
         emisor = e
         destinoEmision = d
+        enviarPausaLocal = true
         main.removeCallbacks(vigilanteInicio)
         try { m?.pause() } catch (t: Throwable) { /* nada */ }
         tomarBloqueos()
-        e.cargar(url, mime, titulo.ifEmpty { f.titulo }, directo, pos)
+        e.cargar(url, mime, titulo.ifEmpty { f.titulo }, directo, pos, urlSubs)
         actualizarSesion()
         notificar()
     }
@@ -1512,6 +1526,13 @@ class PlaybackService : Service() {
         val m = mp ?: return
         subsExternas.add(f)
         m.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(f), true)
+        // Llegaron subtítulos mientras se emite: se vuelve a mandar el vídeo con ellos, por donde iba.
+        val d = destinoEmision
+        val em = emisor
+        if (d != null && em != null) {
+            val p = em.estado().posMs
+            main.post { if (emisor === em) emitirA(d, p) }
+        }
     }
 
     /** Desfase de los subtítulos en milisegundos (positivo = más tarde). */
