@@ -244,6 +244,8 @@ object Informacion {
             }
             val ls = String(r.cuerpo, Charsets.UTF_8).lines().map { it.trim() }.filter { it.isNotEmpty() }
             val segs = ls.filter { !it.startsWith("#") }
+            val relleno = segs.count { it.contains("placeholder", true) }
+            sb.append("  Trozos de relleno (placeholder): ").append(relleno).append(" de ").append(segs.size).append('\n')
             sb.append("  Segmentos de subtítulos: ").append(segs.size)
             sb.append(if (ls.any { it.startsWith("#EXT-X-ENDLIST") }) " (completa)" else " (directo)").append('\n')
             if (ls.any { it.startsWith("#EXT-X-MAP") }) sb.append("  Usa EXT-X-MAP (subtítulos en MP4/TTML): libVLC 3 no los lee bien.\n")
