@@ -133,6 +133,11 @@ class Ajustes(ctx: Context) {
         get() = sp.getBoolean("cola_auto", true)
         set(v) { sp.edit().putBoolean("cola_auto", v).apply() }
 
+    /** No cargar las pistas de subtítulos que traen los canales en directo (algunas dejan el canal parado). */
+    var sinSubsCanales: Boolean
+        get() = sp.getBoolean("sin_subs_canales", false)
+        set(v) { sp.edit().putBoolean("sin_subs_canales", v).apply() }
+
     /** Usar el gestor de archivos propio (com.carpe.gestorarchivos) para elegir archivos y carpetas, si está instalado. */
     var usarGestor: Boolean
         get() = sp.getBoolean("usar_gestor", true)
