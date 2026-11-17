@@ -128,3 +128,19 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - Solo SRT o WebVTT; los .ass con estilos y los subtítulos incrustados en el MKV no se envían.
 - Con la pantalla bloqueada la emisión sigue (servicio en primer plano con bloqueos de CPU y Wi‑Fi). En Xiaomi/MIUI pon la app en
   «Sin restricciones» de batería y fíjala en recientes.
+
+## 0.6.2 — Canales y https en teles DLNA
+
+- Las teles DLNA antiguas (Samsung 2012…) no entienden HLS (.m3u8) ni https. Al enviarles un canal o una dirección de ese tipo, el móvil
+  la abre con libVLC (con su Referer y User-Agent) y la re-emite por HTTP como MPEG-TS sin recodificar. Es un directo: sin saltar de posición,
+  sin subtítulos, y el móvil debe seguir encendido (con la pantalla bloqueada vale).
+- Chromecast no cambia: recibe la dirección original.
+
+## 0.6.3 — Mando minimizable y cambio de contenido emitiendo
+
+- El mando de la emisión se puede **minimizar** (▾) a una franja inferior con pausa, ⤢ (ampliar) y ✕ (parar). Se minimiza solo al abrir la lista
+  de canales, de archivos o la cola, que quedan completos por encima de la franja.
+- Cambiar de canal, de archivo del torrent, de pista de la cola o abrir otro contenido **mientras se emite** ya no corta la emisión:
+  el contenido nuevo se manda a la misma pantalla.
+- Al parar y volver al móvil, sigue por donde iba la tele.
+- **Ajustes › Acerca de** muestra la versión, la compilación y los motores usados.
