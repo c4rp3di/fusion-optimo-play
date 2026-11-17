@@ -26,6 +26,9 @@ class ServidorLan(private val ctx: Context, private val motor: () -> MotorTorren
     private val archivos = ConcurrentHashMap<Int, Pair<Uri, String>>()
     private var siguienteId = 1
     @Volatile private var activo = false
+    private val textos = ConcurrentHashMap<Int, Pair<ByteArray, String>>()
+    /** Si no es null, se anuncia en las respuestas del vídeo (cabecera «CaptionInfo.sec» de Samsung). */
+    @Volatile var subCabecera: String? = null
 
     @Synchronized
     private fun iniciar(): Int {
@@ -64,12 +67,22 @@ class ServidorLan(private val ctx: Context, private val motor: () -> MotorTorren
         return "http://" + ip + ":" + iniciar() + "/" + token + "/f/" + id + "/" + Uri.encode(nombre)
     }
 
+    /** Sirve un subtítulo ya preparado y devuelve su dirección. */
+    @Synchronized
+    fun urlTexto(bytes: ByteArray, ext: String, mime: String): String? {
+        val ip = Utiles.ipLan(ctx) ?: return null
+        val id = siguienteId++
+        textos[id] = Pair(bytes, mime)
+        return "http://" + ip + ":" + iniciar() + "/" + token + "/s/" + id + "/sub." + ext
+    }
+
     @Synchronized
     fun detener() {
         activo = false
         try { ss?.close() } catch (e: Exception) { /* nada */ }
         ss = null
         archivos.clear()
+        textos.clear()
     }
 
     private interface Origen {
@@ -179,6 +192,19 @@ class ServidorLan(private val ctx: Context, private val motor: () -> MotorTorren
                 return
             }
             val id = seg[2].toIntOrNull() ?: -1
+            if (seg[1] == "s") {
+                val t = textos[id]
+                if (t == null) {
+                    responder(c, 404, "Not Found")
+                    return
+                }
+                val so = BufferedOutputStream(c.getOutputStream(), 65536)
+                so.write(("HTTP/1.1 200 OK\r\nContent-Type: " + t.second + "\r\nContent-Length: " + t.first.size +
+                    "\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n").toByteArray(Charsets.ISO_8859_1))
+                if (metodo != "HEAD") so.write(t.first)
+                so.flush()
+                return
+            }
             val origen = if (seg[1] == "t") origenTorrent(id) else origenArchivo(id)
             if (origen == null) {
                 responder(c, 404, "Not Found")
@@ -218,6 +244,8 @@ class ServidorLan(private val ctx: Context, private val motor: () -> MotorTorren
             cab.append("Access-Control-Expose-Headers: Content-Range, Content-Length, Accept-Ranges\r\n")
             cab.append("transferMode.dlna.org: Streaming\r\n")
             cab.append("contentFeatures.dlna.org: DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\r\n")
+            val sc = subCabecera
+            if (sc != null) cab.append("CaptionInfo.sec: ").append(sc).append("\r\n")
             cab.append("Connection: close\r\n\r\n")
             sal.write(cab.toString().toByteArray(Charsets.ISO_8859_1))
             if (metodo == "HEAD") {
