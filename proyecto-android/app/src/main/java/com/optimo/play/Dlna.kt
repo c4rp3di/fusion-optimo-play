@@ -168,9 +168,11 @@ object Dlna {
             est = EstadoRemoto(false, false, false, false, e.posMs, e.durMs, msg)
         }
 
-        override fun cargar(url: String, mime: String, titulo: String, directo: Boolean, posMs: Long) {
+        override fun cargar(url: String, mime: String, titulo: String, directo: Boolean, posMs: Long, subs: String?) {
             this.directo = directo
             posInicial = posMs
+            haSonado = false
+            est = EstadoRemoto(true, false, false, false, 0L, 0L, null)
             ejecutor.execute {
                 try {
                     try { accion("Stop", "<InstanceID>0</InstanceID>") } catch (e: Exception) { /* nada que parar */ }
@@ -178,19 +180,24 @@ object Dlna {
                     val dlnaMime = if (mime == "video/x-matroska") "video/x-mkv" else mime
                     val didl = "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" " +
                         "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" " +
-                        "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">" +
+                        "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" " +
+                        "xmlns:sec=\"http://www.sec.co.kr/\">" +
                         "<item id=\"0\" parentID=\"-1\" restricted=\"1\"><dc:title>" + escapar(titulo) + "</dc:title>" +
                         "<upnp:class>" + (if (mime.startsWith("audio")) "object.item.audioItem" else "object.item.videoItem") +
                         "</upnp:class><res protocolInfo=\"http-get:*:" + dlnaMime +
                         ":DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\">" +
-                        escapar(url) + "</res></item></DIDL-Lite>"
+                        escapar(url) + "</res>" +
+                        (if (subs != null) "<res protocolInfo=\"http-get:*:text/srt:*\">" + escapar(subs) + "</res>" +
+                            "<sec:CaptionInfoEx sec:type=\"srt\">" + escapar(subs) + "</sec:CaptionInfoEx>" +
+                            "<sec:CaptionInfo sec:type=\"srt\">" + escapar(subs) + "</sec:CaptionInfo>" else "") +
+                        "</item></DIDL-Lite>"
                     accion(
                         "SetAVTransportURI",
                         "<InstanceID>0</InstanceID><CurrentURI>" + escapar(url) + "</CurrentURI><CurrentURIMetaData>" +
                             escapar(didl) + "</CurrentURIMetaData>"
                     )
                     accion("Play", "<InstanceID>0</InstanceID><Speed>1</Speed>")
-                    iniciarSondeo()
+                    if (sondeo == null) iniciarSondeo()
                 } catch (e: Exception) {
                     fallo(e.message ?: e.javaClass.simpleName)
                 }
