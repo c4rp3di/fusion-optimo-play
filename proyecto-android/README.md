@@ -119,3 +119,12 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
   propios pueden no abrirse. Los subtítulos no se envían. Chromecast necesita Google Play services.
 - Chromecast está aislado en CastGoogle.kt y CastOpciones.kt: si diera problemas al compilar se quita junto con las dos dependencias
   de gradle y el `meta-data` del manifiesto.
+
+## 0.6.1 — Subtítulos al enviar a la tele
+
+- Al enviar, se manda también el subtítulo cargado (archivo externo, el de OpenSubtitles o el de un torrent), con el retardo que tengas puesto:
+  a **Chromecast** como WebVTT (blanco con borde y fondo semitransparente) y a **DLNA/Samsung** como SRT (cabecera y etiquetas `CaptionInfo.sec`).
+- Si los subtítulos llegan después de enviar (búsqueda automática), el vídeo se vuelve a mandar con ellos por donde iba.
+- Solo SRT o WebVTT; los .ass con estilos y los subtítulos incrustados en el MKV no se envían.
+- Con la pantalla bloqueada la emisión sigue (servicio en primer plano con bloqueos de CPU y Wi‑Fi). En Xiaomi/MIUI pon la app en
+  «Sin restricciones» de batería y fíjala en recientes.
