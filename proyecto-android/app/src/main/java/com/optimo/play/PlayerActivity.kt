@@ -115,6 +115,12 @@ class PlayerActivity : Activity() {
     private lateinit var remSeek: SeekBar
     private lateinit var remBtnPlay: TextView
     private var remArrastrando = false
+    private var remMin = false
+    private var remPanelPrev = false
+    private var remModo = 0
+    private lateinit var remMini: LinearLayout
+    private lateinit var remMiniTxt: TextView
+    private lateinit var remMiniPlay: TextView
     private var detenerCast: (() -> Unit)? = null
     /** índice del archivo del torrent → (nombre, estado de guardado) de su fila en el panel lateral. */
     private val filasArchivos = HashMap<Int, Pair<TextView, TextView>>()
@@ -1306,20 +1312,48 @@ class PlayerActivity : Activity() {
         panelRemoto.addView(remTiempo)
         panelRemoto.addView(fila)
         panelRemoto.addView(miniBoton("Parar y volver al móvil") { svc?.volverALocal(true) })
+        panelRemoto.addView(miniBoton("▾ Minimizar (seguir viendo canales)") { remMin = true })
 
         val lp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         lp.topMargin = dp(72) // la barra superior (⋮) sigue al alcance
         raiz.addView(panelRemoto, lp)
+
+        // Versión mínima: una franja abajo para seguir usando los canales y la lista mientras se emite.
+        remMini = LinearLayout(this)
+        remMini.orientation = LinearLayout.HORIZONTAL
+        remMini.gravity = Gravity.CENTER_VERTICAL
+        remMini.setBackgroundColor(0xF0222222.toInt())
+        remMini.isClickable = true
+        remMini.visibility = View.GONE
+        remMiniTxt = texto("", 13f)
+        remMiniTxt.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        remMiniTxt.setSingleLine(true)
+        remMiniTxt.ellipsize = android.text.TextUtils.TruncateAt.END
+        remMini.addView(remMiniTxt, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        remMiniPlay = miniBoton("❚❚") { svc?.emisorAlternar() }
+        remMini.addView(remMiniPlay)
+        remMini.addView(miniBoton("⤢") { remMin = false })
+        remMini.addView(miniBoton("✕") { svc?.volverALocal(true) })
+        raiz.addView(remMini, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
     }
 
     private fun actualizarRemoto(s: PlaybackService) {
         val e = s.emisor
         if (e == null) {
-            if (panelRemoto.visibility != View.GONE) panelRemoto.visibility = View.GONE
+            remMin = false
+            ponerModoRemoto(0)
             return
         }
-        panelRemoto.visibility = View.VISIBLE
+        // Si se abre una lista (canales, archivos, cola) el mando se hace pequeño para no taparla.
+        val algunoAbierto = panelAbierto || panelCanAbierto || panelColaAbierto
+        if (algunoAbierto && !remPanelPrev) remMin = true
+        remPanelPrev = algunoAbierto
+        ponerModoRemoto(if (remMin) 2 else 1)
         val st = e.estado()
+        remMiniTxt.text = "📺 " + e.nombre + " · " + s.titulo +
+            (if (st.error != null) " ⚠" else if (st.cargando) " …" else "")
+        remMiniPlay.text = if (st.sonando) "❚❚" else "▶"
+
         remTitulo.text = s.titulo
         remEstado.text = when {
             st.error != null -> "⚠ " + st.error
@@ -1338,6 +1372,21 @@ class PlayerActivity : Activity() {
                 remSeek.visibility = View.INVISIBLE
                 remTiempo.text = if (s.hayCanales) "● EN DIRECTO" else "--"
             }
+        }
+    }
+
+    /** 0 sin emisión, 1 mando grande, 2 franja mínima. En la franja, los paneles laterales se acortan para no quedar tapados. */
+    private fun ponerModoRemoto(modo: Int) {
+        if (modo == remModo) return
+        remModo = modo
+        panelRemoto.visibility = if (modo == 1) View.VISIBLE else View.GONE
+        remMini.visibility = if (modo == 2) View.VISIBLE else View.GONE
+        val margen = if (modo == 2) dp(52) else 0
+        val vistas = listOf<View>(panelArchivos, panelCan.vista, panelCola.vista)
+        for (v in vistas) {
+            val lp = v.layoutParams as? FrameLayout.LayoutParams ?: continue
+            lp.bottomMargin = margen
+            v.layoutParams = lp
         }
     }
 
