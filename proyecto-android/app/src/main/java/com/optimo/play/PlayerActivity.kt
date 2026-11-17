@@ -1365,8 +1365,31 @@ class PlayerActivity : Activity() {
             return
         }
         val actual = m.audioTrack
-        lista("Pista de audio", pistas.map { (if (it.id == actual) "● " else "") + it.name }) {
-            m.setAudioTrack(pistas[it].id)
+        val etiquetas = ArrayList<String>()
+        for (p in pistas) etiquetas.add((if (p.id == actual) "● " else "") + p.name)
+        etiquetas.add("Audio preferido: " + nombreAudioPreferido() + "…")
+        lista("Pista de audio", etiquetas) {
+            if (it < pistas.size) svc?.elegirAudio(pistas[it].id) else menuAudioPreferido()
+        }
+    }
+
+    private val CLAVES_AUDIO = listOf("", "primera", "en", "es", "fr", "de", "it", "pt", "ja", "ko")
+    private val NOMBRES_AUDIO = listOf(
+        "Automático (el que marque el servidor)", "La primera pista (suele ser el original)",
+        "Inglés", "Español", "Francés", "Alemán", "Italiano", "Portugués", "Japonés", "Coreano"
+    )
+
+    private fun nombreAudioPreferido(): String {
+        val i = CLAVES_AUDIO.indexOf(aj.audioPreferido)
+        return if (i < 0) "automático" else NOMBRES_AUDIO[i].substringBefore(" (").lowercase()
+    }
+
+    /** Qué pista de audio se elige sola al empezar (también en los canales de una lista). */
+    private fun menuAudioPreferido() {
+        lista("Audio preferido", NOMBRES_AUDIO) {
+            aj.audioPreferido = CLAVES_AUDIO[it]
+            svc?.aplicarAudioPreferido(true)
+            aviso("Audio preferido: " + nombreAudioPreferido())
         }
     }
 
