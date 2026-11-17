@@ -118,6 +118,30 @@ class Ajustes(ctx: Context) {
         return o
     }
 
+    /** Orientación del reproductor: 0 automática (respeta el bloqueo de rotación del sistema), 1 horizontal, 2 vertical. */
+    var orientacion: Int
+        get() = sp.getInt("orient", 0)
+        set(v) { sp.edit().putInt("orient", v.coerceIn(0, 2)).apply() }
+
+    /** Al abrir un audio de una carpeta con acceso concedido, poner en cola el resto de audios de esa carpeta. */
+    var colaAuto: Boolean
+        get() = sp.getBoolean("cola_auto", true)
+        set(v) { sp.edit().putBoolean("cola_auto", v).apply() }
+
+    /** Usar el gestor de archivos propio (com.carpe.gestorarchivos) para elegir archivos y carpetas, si está instalado. */
+    var usarGestor: Boolean
+        get() = sp.getBoolean("usar_gestor", true)
+        set(v) { sp.edit().putBoolean("usar_gestor", v).apply() }
+
+    /** Cola: 0 sin repetir, 1 repetir toda la cola, 2 repetir la pista. */
+    var colaRepetir: Int
+        get() = sp.getInt("cola_rep", 0)
+        set(v) { sp.edit().putInt("cola_rep", v.coerceIn(0, 2)).apply() }
+
+    var colaAleatorio: Boolean
+        get() = sp.getBoolean("cola_azar", false)
+        set(v) { sp.edit().putBoolean("cola_azar", v).apply() }
+
     // ---------------------------------------------------------------- recientes y posicion
 
     private fun cargarRecientes(): MutableList<Reciente> {
