@@ -144,3 +144,15 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
   el contenido nuevo se manda a la misma pantalla.
 - Al parar y volver al móvil, sigue por donde iba la tele.
 - **Ajustes › Acerca de** muestra la versión, la compilación y los motores usados.
+
+## 0.6.4 — Subtítulos de canales
+
+- **Información › Sondeo del flujo HLS** ahora lista las pistas de subtítulos del manifiesto (idioma, si son por defecto/automáticas/forzadas, o CC
+  incrustados), y comprueba la primera: respuesta del servidor, nº de segmentos, si es WebVTT y si usa X-TIMESTAMP-MAP o EXT-X-MAP.
+- Al elegir una pista de subtítulos en un directo, si a los 7 s la imagen no avanza, se quita sola la pista y se avisa.
+- **Ajustes › Ignorar subtítulos incluidos en los canales:** no carga las pistas de subtítulos de los canales (`:no-spu`).
+
+## 0.6.5 — Recuperar canales congelados por sus subtítulos
+
+- Si al elegir un subtítulo incluido en un canal la imagen se congela y quitar la pista no la despierta, el canal se reabre solo
+  sin subtítulos incluidos (hasta cambiar de canal) y se avisa.
