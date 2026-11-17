@@ -1610,7 +1610,7 @@ class PlayerActivity : Activity() {
             val actual = m.spuTrack
             for (p in pistas) {
                 etiquetas.add((if (p.id == actual) "● " else "") + p.name)
-                acciones.add { m.setSpuTrack(p.id) }
+                acciones.add { s.elegirSubtitulo(p.id) }
             }
         }
         etiquetas.add("Cargar archivo de subtítulos…"); acciones.add { elegirArchivoSubs() }
