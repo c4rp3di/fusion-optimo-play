@@ -173,3 +173,9 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
   tras reabrir un canal que sigue congelado.
 - Elegir una pista de subtítulos ya no se hace en el hilo principal.
 - Información › Sondeo HLS cuenta los trozos de relleno de la pista de subtítulos.
+
+## 0.6.9
+
+- Información › Sondeo HLS: baja cada trozo distinto de la pista de subtítulos y dice cuántos subtítulos trae cada uno
+  (así se ve si el canal manda texto de verdad o solo trozos vacíos).
+- Los trozos `empty_sub.vtt` (Rakuten) también se sustituyen por un WebVTT vacío local, igual que los `placeholder`.
