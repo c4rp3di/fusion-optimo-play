@@ -30,9 +30,11 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
@@ -104,6 +106,16 @@ class PlayerActivity : Activity() {
     private var panelAbierto = false
     private var panelAuto = false
     private var conservarAlSalir = false
+
+    // ---- emisión a la tele (mando remoto)
+    private lateinit var panelRemoto: LinearLayout
+    private lateinit var remTitulo: TextView
+    private lateinit var remEstado: TextView
+    private lateinit var remTiempo: TextView
+    private lateinit var remSeek: SeekBar
+    private lateinit var remBtnPlay: TextView
+    private var remArrastrando = false
+    private var detenerCast: (() -> Unit)? = null
     /** índice del archivo del torrent → (nombre, estado de guardado) de su fila en el panel lateral. */
     private val filasArchivos = HashMap<Int, Pair<TextView, TextView>>()
     private var acumVol = 0f
@@ -303,15 +315,20 @@ class PlayerActivity : Activity() {
     /** Salir del reproductor; si quedan archivos por guardar, ofrece seguir en segundo plano. */
     private fun salir() {
         val s = svc
-        if (s != null && s.hayGuardadoPendiente()) {
+        val emitiendo = s != null && s.emisor != null
+        val guardando = s != null && s.hayGuardadoPendiente()
+        if (s != null && (emitiendo || guardando)) {
+            var msg = ""
+            if (emitiendo) msg += "Se está emitiendo a " + (s.destinoEmision?.nombre ?: "la tele") + "."
+            if (guardando) msg += (if (emitiendo) "\n" else "") + "Aún se están descargando archivos para guardar (" + s.resumenGuardado() + ")."
             AlertDialog.Builder(this)
-                .setTitle("Guardando en el dispositivo")
-                .setMessage("Aún se están descargando archivos para guardar (" + s.resumenGuardado() + ").")
+                .setTitle(if (emitiendo) "Emitiendo a la tele" else "Guardando en el dispositivo")
+                .setMessage(msg)
                 .setPositiveButton("Seguir en segundo plano") { _, _ ->
                     conservarAlSalir = true
                     finish()
                 }
-                .setNegativeButton("Cancelar descargas y salir") { _, _ ->
+                .setNegativeButton("Parar y salir") { _, _ ->
                     conservarAlSalir = false
                     finish()
                 }
@@ -351,11 +368,13 @@ class PlayerActivity : Activity() {
 
     override fun onDestroy() {
         h.removeCallbacksAndMessages(null)
+        try { detenerCast?.invoke() } catch (e: Throwable) { /* nada */ }
+        detenerCast = null
         try { unbindService(conexion) } catch (e: Exception) { /* nada */ }
         // Salir con «atrás» detiene la reproducción; ir al escritorio o bloquear NO destruye la actividad.
         if (isFinishing) {
             val s = svc
-            if (conservarAlSalir && s != null && s.hayGuardadoPendiente()) s.soloDescarga() else s?.detener()
+            if (conservarAlSalir && s != null && (s.hayGuardadoPendiente() || s.emisor != null)) s.soloDescarga() else s?.detener()
         }
         super.onDestroy()
     }
@@ -518,6 +537,7 @@ class PlayerActivity : Activity() {
         construirPanel()
         construirPanelCanales()
         construirPanelCola()
+        construirRemoto()
         raiz.setOnApplyWindowInsetsListener { _, ins ->
             aplicarInsets(ins)
             ins
@@ -1228,6 +1248,8 @@ class PlayerActivity : Activity() {
         }
         if (panelAbierto) refrescarPanel(s)
 
+        actualizarRemoto(s)
+
         if (s.fin || s.error != null) {
             if (!capaVisible) mostrarCapa()
         } else if (s.esAudioActual) {
@@ -1240,6 +1262,137 @@ class PlayerActivity : Activity() {
             audioVisto = false
             if (capaVisible && m?.isPlaying == true && SystemClock.uptimeMillis() > ocultarEn) ocultarCapa()
         }
+    }
+
+    // ---------------------------------------------------------------- enviar a la tele
+
+    private fun construirRemoto() {
+        panelRemoto = LinearLayout(this)
+        panelRemoto.orientation = LinearLayout.VERTICAL
+        panelRemoto.gravity = Gravity.CENTER
+        panelRemoto.setBackgroundColor(Color.BLACK)
+        panelRemoto.isClickable = true // se queda los toques
+        panelRemoto.setPadding(dp(24), dp(16), dp(24), dp(16))
+        panelRemoto.visibility = View.GONE
+
+        remTitulo = texto("", 20f)
+        remEstado = texto("", 15f)
+        remEstado.setTextColor(0xFFBBBBBB.toInt())
+        remSeek = SeekBar(this)
+        remSeek.max = 1000
+        remSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, p: Int, delUsuario: Boolean) {}
+            override fun onStartTrackingTouch(sb: SeekBar) { remArrastrando = true }
+            override fun onStopTrackingTouch(sb: SeekBar) {
+                remArrastrando = false
+                val e = svc?.emisor ?: return
+                val dur = e.estado().durMs
+                if (dur > 0) svc?.emisorBuscar(dur * sb.progress / 1000L)
+            }
+        })
+        remTiempo = texto("", 14f)
+
+        val fila = LinearLayout(this)
+        fila.orientation = LinearLayout.HORIZONTAL
+        fila.gravity = Gravity.CENTER
+        fila.addView(miniBoton("−10") { svc?.emisorSaltar(-10_000L) })
+        remBtnPlay = miniBoton("❚❚") { svc?.emisorAlternar() }
+        fila.addView(remBtnPlay)
+        fila.addView(miniBoton("+10") { svc?.emisorSaltar(10_000L) })
+
+        panelRemoto.addView(remTitulo)
+        panelRemoto.addView(remEstado)
+        panelRemoto.addView(remSeek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        panelRemoto.addView(remTiempo)
+        panelRemoto.addView(fila)
+        panelRemoto.addView(miniBoton("Parar y volver al móvil") { svc?.volverALocal(true) })
+
+        val lp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        lp.topMargin = dp(72) // la barra superior (⋮) sigue al alcance
+        raiz.addView(panelRemoto, lp)
+    }
+
+    private fun actualizarRemoto(s: PlaybackService) {
+        val e = s.emisor
+        if (e == null) {
+            if (panelRemoto.visibility != View.GONE) panelRemoto.visibility = View.GONE
+            return
+        }
+        panelRemoto.visibility = View.VISIBLE
+        val st = e.estado()
+        remTitulo.text = s.titulo
+        remEstado.text = when {
+            st.error != null -> "⚠ " + st.error
+            st.fin -> "Terminó en " + e.nombre
+            st.cargando -> "Conectando con " + e.nombre + "…"
+            st.pausa -> "En pausa en " + e.nombre
+            else -> "Emitiendo a " + e.nombre
+        }
+        remBtnPlay.text = if (st.sonando) "❚❚" else "▶"
+        if (!remArrastrando) {
+            if (st.durMs > 0) {
+                remSeek.visibility = View.VISIBLE
+                remSeek.progress = (st.posMs * 1000L / st.durMs).toInt().coerceIn(0, 1000)
+                remTiempo.text = Utiles.fmt(st.posMs) + " / " + Utiles.fmt(st.durMs)
+            } else {
+                remSeek.visibility = View.INVISIBLE
+                remTiempo.text = if (s.hayCanales) "● EN DIRECTO" else "--"
+            }
+        }
+    }
+
+    /** Busca tele DLNA y Chromecast en la red y deja elegir. */
+    private fun dialogoDestinos() {
+        val s = svc ?: return
+        val nombres = ArrayList<String>()
+        val destinos = ArrayList<Destino>()
+        val adaptador = ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, nombres)
+        val lv = ListView(this)
+        lv.adapter = adaptador
+        val dlg = AlertDialog.Builder(this)
+            .setTitle("Buscando pantallas…")
+            .setView(lv)
+            .setNegativeButton("Cancelar", null)
+            .create()
+        var activa = true
+
+        fun agregar(d: Destino) {
+            h.post {
+                if (!activa) return@post
+                if (destinos.any { it.tipo == d.tipo && it.id == d.id }) return@post
+                destinos.add(d)
+                nombres.add((if (d.tipo == Destino.CHROMECAST) "Chromecast · " else "TV (DLNA) · ") + d.nombre)
+                adaptador.notifyDataSetChanged()
+                dlg.setTitle("Elige una pantalla")
+            }
+        }
+
+        try { detenerCast?.invoke() } catch (e: Throwable) { /* nada */ }
+        detenerCast = CastGoogle.buscar(this) { d -> agregar(d) }
+        Thread {
+            Dlna.descubrir(this, 6000L) { dev -> agregar(Destino(Destino.DLNA, dev.nombre, dev.controlUrl, dev)) }
+            h.post {
+                if (activa && destinos.isEmpty()) {
+                    dlg.setTitle("No se encontró ninguna pantalla")
+                    nombres.add("Comprueba que el móvil y la tele están en la misma Wi-Fi")
+                    adaptador.notifyDataSetChanged()
+                }
+            }
+        }.start()
+
+        lv.setOnItemClickListener { _, _, i, _ ->
+            if (i in destinos.indices) {
+                activa = false
+                dlg.dismiss()
+                s.emitirA(destinos[i])
+                // La búsqueda de Chromecast se mantiene un rato para que pueda conectar.
+                val parar = detenerCast
+                h.postDelayed({ try { parar?.invoke() } catch (e: Throwable) { /* nada */ } }, 25_000L)
+                detenerCast = null
+            }
+        }
+        dlg.setOnDismissListener { activa = false }
+        dlg.show()
     }
 
     // ---------------------------------------------------------------- menús
@@ -1268,6 +1421,11 @@ class PlayerActivity : Activity() {
         }
         if (s.hayCanales && !(s.fuente?.uri ?: "").startsWith(Biblioteca.PREFIJO)) {
             etiquetas.add("Guardar esta lista en la app"); acciones.add { guardarListaEnApp() }
+        }
+        if (s.emisor != null) {
+            etiquetas.add("Dejar de emitir (volver al móvil)"); acciones.add { s.volverALocal(true) }
+        } else if (s.urlReproduccion != null && s.mp != null) {
+            etiquetas.add("Enviar a la tele…"); acciones.add { dialogoDestinos() }
         }
         etiquetas.add("Velocidad"); acciones.add { menuVelocidad() }
         etiquetas.add("Decodificación de vídeo"); acciones.add { menuDecodificacion() }
