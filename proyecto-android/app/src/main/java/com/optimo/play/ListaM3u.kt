@@ -26,6 +26,9 @@ data class Canal(
     val clave: String get() = (tvgId ?: "") + "|" + nombre.lowercase()
 }
 
+/** Una línea de dirección o ruta de una lista, con el título de su #EXTINF si lo trae. */
+class EntradaM3u(val ruta: String, val titulo: String?)
+
 class ListaM3u(val canales: List<Canal>, val urlGuia: String?) {
 
     private class Pend {
@@ -51,6 +54,39 @@ class ListaM3u(val canales: List<Canal>, val urlGuia: String?) {
                 return false
             }
             return true
+        }
+
+        /** Entradas de una lista (líneas que no son etiquetas), cada una con el título de su #EXTINF si lo hay. */
+        fun entradas(texto: String): List<EntradaM3u> {
+            val salida = ArrayList<EntradaM3u>()
+            var titulo: String? = null
+            for (raw in texto.removePrefix("\uFEFF").lineSequence()) {
+                val l = raw.trim()
+                if (l.isEmpty()) continue
+                if (l.startsWith("#EXTINF", true)) {
+                    val coma = l.indexOf(',')
+                    titulo = if (coma >= 0) l.substring(coma + 1).trim().takeIf { it.isNotEmpty() } else null
+                    continue
+                }
+                if (l.startsWith("#")) continue
+                salida.add(EntradaM3u(l, titulo))
+                titulo = null
+            }
+            return salida
+        }
+
+        fun esRutaLocal(r: String): Boolean =
+            !r.startsWith("magnet:", true) && (r.startsWith("file://", true) || !r.contains("://"))
+
+        /**
+         * ¿Es una lista de archivos locales (típico de un disco: «01 Intro.mp3», «CD2/02 Tema.flac»…) y no de canales
+         * ni un vídeo HLS? Sí si no lleva etiquetas HLS y la mayoría de sus entradas son rutas, no direcciones de red.
+         */
+        fun esLocal(t: String): Boolean {
+            if (t.contains("#EXT-X-")) return false
+            val e = entradas(t)
+            if (e.isEmpty()) return false
+            return e.count { esRutaLocal(it.ruta) } * 2 > e.size
         }
 
         private val ATRIBUTO = Regex("([A-Za-z0-9_.-]+)\\s*=\\s*\"([^\"]*)\"")
@@ -171,6 +207,7 @@ class ListaM3u(val canales: List<Canal>, val urlGuia: String?) {
 
         /** Texto de una lista (URL, archivo del dispositivo o content://). Null si no se puede leer. */
         fun leer(ctx: Context, f: Fuente): String? {
+            if (f.uri.startsWith(Biblioteca.PREFIJO, true)) return Biblioteca.leer(ctx, f.uri.substring(Biblioteca.PREFIJO.length))
             val u = Uri.parse(f.uri)
             val ins: InputStream = if (u.scheme == "http" || u.scheme == "https") {
                 val c = Red.conexion(f.uri, f.ua, f.referer)
@@ -180,7 +217,19 @@ class ListaM3u(val canales: List<Canal>, val urlGuia: String?) {
                 ctx.contentResolver.openInputStream(u) ?: return null
             }
             val datos = ins.use { Red.leerBytes(it, 6_000_000) }
-            return String(datos, Charsets.UTF_8)
+            return texto(datos)
+        }
+
+        /** UTF-8 si lo es; si no (listas .m3u antiguas de Windows), Windows-1252. */
+        fun texto(datos: ByteArray): String {
+            return try {
+                Charsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(datos)).toString()
+            } catch (e: java.nio.charset.CharacterCodingException) {
+                String(datos, java.nio.charset.Charset.forName("windows-1252"))
+            }
         }
     }
 }
