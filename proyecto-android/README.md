@@ -162,3 +162,14 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - Corregido un fallo nativo (SIGSEGV en `torrent_handle::is_valid`, desde `MotorTorrent.abrir`): el torrent se seguía consultando con un objeto
   `TorrentHandle` compartido entre hilos mientras otro lo cerraba. Ahora cada consulta pide su propio handle por info-hash y, si el torrent ya no
   existe o se abrió otro, el hilo antiguo sale sin tocar memoria nativa.
+
+## 0.6.7 / 0.6.8 — Subtítulos de canales sin congelar la imagen
+
+- En los canales HLS, libVLC abre un manifiesto local (127.0.0.1) que es el original con los trozos de subtítulos «de relleno»
+  (`/placeholder/`, con una marca de tiempo fija que no casa con el vídeo y que congelaba la imagen) sustituidos por un WebVTT vacío.
+  Los trozos con texto real pasan tal cual, así que **los subtítulos de los canales siguen disponibles y se pueden elegir**.
+  Si el manifiesto no tiene subtítulos, libVLC lo abre directamente.
+- **Ajustes › Quitar por completo los subtítulos incluidos en los canales:** elimina también las pistas (último recurso). Se usa solo
+  tras reabrir un canal que sigue congelado.
+- Elegir una pista de subtítulos ya no se hace en el hilo principal.
+- Información › Sondeo HLS cuenta los trozos de relleno de la pista de subtítulos.
