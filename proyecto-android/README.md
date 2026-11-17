@@ -107,3 +107,15 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - **Información › Sondeo del flujo HLS:** para URLs HLS baja el manifiesto, la lista de la primera variante y el primer segmento, y muestra qué responde
   el servidor en cada paso (variantes y resoluciones, nº de segmentos, publicidad/cifrado, código del segmento). Sirve para saber por qué un canal se
   queda en «Cargando 0 %».
+
+## 0.6.0 — Enviar a la tele
+
+- **⋮ › Enviar a la tele…** busca en la red Wi-Fi televisores DLNA/UPnP (p. ej. Samsung con AllShare) y Chromecast, y manda lo que suena.
+  El móvil pasa a ser un mando: pausa, ±10 s, barra de posición y «Parar y volver al móvil» (sigue por donde iba la tele).
+- Direcciones web: se las pasa directamente a la tele. Torrent y archivos del dispositivo: el móvil los sirve por la red local
+  (servidor temporal con clave aleatoria, solo mientras emites) — el móvil debe seguir encendido y en la misma Wi-Fi.
+- Salir mientras se emite ofrece «Seguir en segundo plano».
+- Límites: la tele debe entender el códec (H.264/AAC/AC3 en MP4/MKV; HEVC en teles de 2012 no). Las direcciones que exigen Referer/User-Agent
+  propios pueden no abrirse. Los subtítulos no se envían. Chromecast necesita Google Play services.
+- Chromecast está aislado en CastGoogle.kt y CastOpciones.kt: si diera problemas al compilar se quita junto con las dos dependencias
+  de gradle y el `meta-data` del manifiesto.
