@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Enviar a la tele: buscar receptores DLNA (multidifusión) y Chromecast en la red local. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Sin permisos de almacenamiento: los archivos se abren con el selector del sistema o desde otras apps. -->
 
     <!-- Para saber si está instalado el gestor de archivos propio y poder abrirlo. -->
@@ -109,6 +112,11 @@
         <activity
             android:name=".DescargasActivity"
             android:exported="false" />
+
+        <!-- Chromecast (Google Cast). Para quitarlo: borrar esta línea, CastGoogle.kt, CastOpciones.kt y las dos dependencias. -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="com.optimo.play.CastOpciones" />
 
         <service
             android:name=".PlaybackService"
