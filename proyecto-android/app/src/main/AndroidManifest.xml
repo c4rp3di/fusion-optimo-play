@@ -9,6 +9,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Sin permisos de almacenamiento: los archivos se abren con el selector del sistema o desde otras apps. -->
 
+    <!-- Para saber si está instalado el gestor de archivos propio y poder abrirlo. -->
+    <queries>
+        <package android:name="com.carpe.gestorarchivos" />
+    </queries>
+
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
@@ -31,7 +36,7 @@
             android:name=".PlayerActivity"
             android:exported="true"
             android:launchMode="singleTop"
-            android:screenOrientation="sensorLandscape"
+            android:screenOrientation="fullUser"
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|density|layoutDirection|uiMode|fontScale">
@@ -48,6 +53,7 @@
                 <data android:mimeType="video/*" />
                 <data android:mimeType="audio/*" />
                 <data android:mimeType="application/x-mpegURL" />
+                <data android:mimeType="application/x-mpegurl" />
                 <data android:mimeType="application/vnd.apple.mpegurl" />
                 <data android:mimeType="application/dash+xml" />
                 <data android:mimeType="application/x-bittorrent" />
@@ -75,6 +81,7 @@
                 <data android:pathPattern=".*\\.webm" />
                 <data android:pathPattern=".*\\.avi" />
                 <data android:pathPattern=".*\\.m3u8" />
+                <data android:pathPattern=".*\\.m3u" />
                 <data android:pathPattern=".*\\.mpd" />
                 <data android:pathPattern=".*\\.torrent" />
             </intent-filter>
@@ -89,6 +96,18 @@
 
         <activity
             android:name=".AjustesActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".CarpetasActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ListasActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".DescargasActivity"
             android:exported="false" />
 
         <service
