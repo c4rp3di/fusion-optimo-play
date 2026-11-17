@@ -233,7 +233,6 @@ class PlaybackService : Service() {
 
     /** Empieza a reproducir una fuente nueva (URL, archivo, magnet o .torrent). */
     fun abrir(f: Fuente) {
-        volverALocal(false)
         guardarPos()
         hiloTorrent?.interrupt()
         motor.cerrar()
@@ -736,7 +735,6 @@ class PlaybackService : Service() {
     fun elegirCanal(i: Int) {
         val lista = canales
         if (i !in lista.indices) return
-        volverALocal(false)
         val lf = fuente ?: return
         val c = lista[i]
         necesitaElegirCanal = false
@@ -875,6 +873,14 @@ class PlaybackService : Service() {
         }
         m.setMedia(media)
         media.release()
+        val dEmi = destinoEmision
+        if (emisor != null && dEmi != null) {
+            // Se está emitiendo: el contenido nuevo se manda a la misma pantalla en vez de sonar en el móvil.
+            main.removeCallbacks(vigilanteInicio)
+            val p = posReanudar
+            main.post { if (emisor != null) emitirA(dEmi, p) }
+            return
+        }
         m.play()
         main.removeCallbacks(vigilanteInicio)
         main.postDelayed(vigilanteInicio, 12_000L)
@@ -928,7 +934,6 @@ class PlaybackService : Service() {
     /** El usuario eligió un archivo concreto del torrent (también sirve para cambiar de capítulo). */
     fun elegirArchivoTorrent(indice: Int) {
         val a = archivosTorrent.firstOrNull { it.indice == indice } ?: return
-        volverALocal(false)
         necesitaElegir = false
         objetivoTorrent = a
         fin = false
@@ -1119,6 +1124,7 @@ class PlaybackService : Service() {
         private set
     private var lan: ServidorLan? = null
     private var enviarPausaLocal = false
+    private var retrans: Retransmision? = null
 
     /** Manda lo que suena a una tele. El móvil se queda sirviendo el archivo si es del torrent o del dispositivo. */
     fun emitirA(d: Destino, posForzada: Long = -1L) {
@@ -1131,7 +1137,7 @@ class PlaybackService : Service() {
         val m = mp
         val pos = if (posForzada >= 0L) posForzada else try { m?.time ?: 0L } catch (e: Throwable) { 0L }
         val len = try { m?.length ?: 0L } catch (e: Throwable) { 0L }
-        val directo = len <= 0L
+        val directo = if (len > 0L) false else (hayCanales || m?.isPlaying == true)
         // Si ya se emitía a esta misma pantalla (p. ej. llegaron subtítulos), se reutiliza la conexión.
         val previo = emisor
         val reutilizar = previo != null && lan != null && destinoEmision?.id == d.id && destinoEmision?.tipo == d.tipo
@@ -1139,6 +1145,7 @@ class PlaybackService : Service() {
         val srv = if (reutilizar) lan!! else ServidorLan(this) { motor }
         var url: String? = null
         var mime = "video/mp4"
+        var retransmitido = false
         val ta = archivoTorrentActual
         if (esTorrent) {
             if (ta == null) {
@@ -1150,7 +1157,24 @@ class PlaybackService : Service() {
         } else if (url0.startsWith("http", true)) {
             url = url0
             mime = Utiles.mimeDeUrl(url0)
-            if (!f.referer.isNullOrBlank()) {
+            val ipL = Utiles.ipLan(this)
+            val dificil = url0.startsWith("https", true) || directo || mime == "application/vnd.apple.mpegurl" || mime == "application/dash+xml"
+            if (d.tipo == Destino.DLNA && dificil && ipL != null) {
+                // Las teles DLNA antiguas no entienden HLS ni https: el móvil lo re-emite como MPEG-TS por HTTP.
+                retrans?.liberar()
+                retrans = null
+                val r = Retransmision(applicationContext, url0, f.referer, f.ua)
+                val p = try { r.iniciar() } catch (t: Throwable) { -1 }
+                if (p > 0) {
+                    retrans = r
+                    url = "http://" + ipL + ":" + p + "/live.ts"
+                    mime = "video/mpeg"
+                    retransmitido = true
+                } else {
+                    r.liberar()
+                }
+            }
+            if (!retransmitido && !f.referer.isNullOrBlank()) {
                 avisoUi = "Esta dirección exigía cabeceras especiales (Referer): la tele puede que no consiga abrirla"
             }
         } else if (url0.startsWith("content:", true) || url0.startsWith("file:", true)) {
@@ -1189,7 +1213,13 @@ class PlaybackService : Service() {
         main.removeCallbacks(vigilanteInicio)
         try { m?.pause() } catch (t: Throwable) { /* nada */ }
         tomarBloqueos()
-        e.cargar(url, mime, titulo.ifEmpty { f.titulo }, directo, pos, urlSubs)
+        if (retransmitido) {
+            // libVLC necesita unos segundos para abrir el canal antes de que la tele pueda conectarse.
+            val u2: String = url
+            main.postDelayed({ if (emisor === e) e.cargar(u2, mime, titulo.ifEmpty { f.titulo }, true, 0L, null) }, 3500L)
+        } else {
+            e.cargar(url, mime, titulo.ifEmpty { f.titulo }, directo, pos, urlSubs)
+        }
         actualizarSesion()
         notificar()
     }
@@ -1203,17 +1233,19 @@ class PlaybackService : Service() {
         try { e?.parar() } catch (t: Throwable) { /* nada */ }
         lan?.detener()
         lan = null
+        retrans?.liberar()
+        retrans = null
         if (e == null) return
         val m = mp
         if (reanudar && m != null) {
-            val directo = try { m.length <= 0L } catch (t: Throwable) { true }
+            val directo = hayCanales || (try { m.length <= 0L && m.isPlaying } catch (t: Throwable) { true })
             val f = fuenteActiva ?: fuente
             val u = ultimaUrl
-            if (directo && f != null && u != null) {
+            if (f != null && u != null) {
+                // Se reabre en el móvil por donde iba la tele (un directo sigue por el punto actual).
+                posReanudar = if (directo) 0L else (st?.posMs ?: 0L)
                 reproducir(u, f)
             } else {
-                val p = st?.posMs ?: 0L
-                try { if (p > 0L) m.setTime(p) } catch (t: Throwable) { /* nada */ }
                 try { m.play() } catch (t: Throwable) { /* nada */ }
             }
         }
