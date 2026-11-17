@@ -53,6 +53,12 @@ object Utiles {
 
     fun esAudio(nombre: String): Boolean = EXT_AUDIO.contains(nombre.substringAfterLast('.', "").lowercase())
 
+    /** «01 Intro.mp3» → «01 Intro». */
+    fun sinExtension(nombre: String): String {
+        val p = nombre.lastIndexOf('.')
+        return if (p > 0 && nombre.length - p <= 6) nombre.substring(0, p) else nombre
+    }
+
     /** Vídeo o audio: lo que se puede poner en la lista de reproducción de un torrent. */
     fun esReproducible(nombre: String): Boolean = esVideo(nombre) || esAudio(nombre)
 
@@ -97,6 +103,7 @@ object Utiles {
         "ogg", "opus" -> "audio/ogg"
         "wav" -> "audio/wav"
         "aac" -> "audio/aac"
+        "m3u", "m3u8" -> "audio/x-mpegurl"
         else -> "application/octet-stream"
     }
 
