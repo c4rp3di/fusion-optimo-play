@@ -77,7 +77,7 @@ class AjustesActivity : Activity() {
         col.addView(nota1)
 
         cSinSubsCanales = CheckBox(this)
-        cSinSubsCanales.text = "Ignorar subtítulos incluidos en los canales (si algún canal se queda parado al tener subtítulos)"
+        cSinSubsCanales.text = "Quitar por completo los subtítulos incluidos en los canales (solo si aun así algún canal se queda parado)"
         cSinSubsCanales.isChecked = aj.sinSubsCanales
         col.addView(cSinSubsCanales)
 
