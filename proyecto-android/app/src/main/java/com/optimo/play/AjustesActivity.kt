@@ -146,6 +146,23 @@ class AjustesActivity : Activity() {
         }
         col.addView(bBorrar)
 
+        titulo("Acerca de")
+        val acerca = TextView(this)
+        var ver = "?"
+        var cod = "?"
+        try {
+            val pi = packageManager.getPackageInfo(packageName, 0)
+            ver = pi.versionName ?: "?"
+            cod = pi.longVersionCode.toString()
+        } catch (e: Exception) {
+            // Sin datos de versión.
+        }
+        acerca.text = "Optimo Play\nVersión " + ver + " (compilación " + cod + ")\n" + packageName +
+            "\nMotor: libVLC 3.6.0 · Torrents: libtorrent4j 2.1.0 · Enviar a la tele: DLNA y Google Cast"
+        acerca.textSize = 14f
+        acerca.setTextIsSelectable(true)
+        col.addView(acerca)
+
         val sv = ScrollView(this)
         sv.addView(col)
         setContentView(sv)
