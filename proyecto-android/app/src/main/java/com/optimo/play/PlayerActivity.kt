@@ -8,7 +8,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -17,6 +19,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Rational
 import android.view.Gravity
@@ -49,9 +52,11 @@ import java.io.File
 class PlayerActivity : Activity() {
 
     private val PEDIR_SUBTITULO = 42
+    private val PEDIR_CARPETA = 43
 
     private var svc: PlaybackService? = null
     private var pendiente: Fuente? = null
+    private var pendienteCola: PedidoCola? = null
     private lateinit var aj: Ajustes
 
     private lateinit var raiz: FrameLayout
@@ -81,6 +86,19 @@ class PlayerActivity : Activity() {
     private lateinit var btnSig: TextView
     private lateinit var btnLista: TextView
     private lateinit var panelCan: PanelCanales
+    private lateinit var panelCola: PanelCola
+    private var panelColaAbierto = false
+    private var pidiendoCarpeta = false
+    private var audioVisto = false
+    private lateinit var filaBot: LinearLayout
+    private lateinit var filaOpc: LinearLayout
+    private lateinit var lpStats: FrameLayout.LayoutParams
+    private val botonesTransporte = ArrayList<View>()
+    private val botonesOpciones = ArrayList<View>()
+    private var insIzq = 0
+    private var insSup = 0
+    private var insDer = 0
+    private var insInf = 0
     private var panelCanAbierto = false
     private var canalesAuto = false
     private var panelAbierto = false
@@ -109,7 +127,9 @@ class PlayerActivity : Activity() {
             svc = s
             val p = pendiente
             pendiente = null
-            if (p != null) abrirConfirmando(s, p)
+            val pc = pendienteCola
+            pendienteCola = null
+            if (pc != null) abrirColaConfirmando(s, pc) else if (p != null) abrirConfirmando(s, p)
             adjuntarSiHaceFalta()
         }
 
@@ -122,6 +142,7 @@ class PlayerActivity : Activity() {
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         aj = Ajustes(this)
+        aplicarOrientacion()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= 28) {
             val atr = window.attributes
@@ -130,12 +151,15 @@ class PlayerActivity : Activity() {
         }
         construirUi()
         setContentView(raiz)
+        acomodar()
+        raiz.requestApplyInsets()
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7)
         }
-        pendiente = fuenteDesde(intent)
+        pendienteCola = ColaIntent.tomar(intent)
+        pendiente = if (pendienteCola != null) null else fuenteDesde(intent)
         // Servicio en primer plano + conexión: el servicio sobrevive a la actividad (segundo plano).
         startForegroundService(Intent(this, PlaybackService::class.java))
         bindService(Intent(this, PlaybackService::class.java), conexion, Context.BIND_AUTO_CREATE)
@@ -144,9 +168,120 @@ class PlayerActivity : Activity() {
     override fun onNewIntent(i: Intent) {
         super.onNewIntent(i)
         setIntent(i)
+        val pc = ColaIntent.tomar(i)
+        if (pc != null) {
+            val s = svc
+            if (s == null) pendienteCola = pc else abrirColaConfirmando(s, pc)
+            return
+        }
         val p = fuenteDesde(i) ?: return
         val s = svc
         if (s == null) pendiente = p else abrirConfirmando(s, p)
+    }
+
+    /** Empieza una cola de archivos locales; si hay archivos de un torrent guardándose, pregunta antes de cancelarlos. */
+    private fun abrirColaConfirmando(s: PlaybackService, pc: PedidoCola) {
+        if (s.hayGuardadoPendiente()) {
+            AlertDialog.Builder(this)
+                .setTitle("Hay archivos guardándose")
+                .setMessage("Se están descargando para guardarlos en el dispositivo (" + s.resumenGuardado() +
+                    "). Si abres otra cosa se cancelarán.")
+                .setPositiveButton("Cancelar y abrir") { _, _ -> s.abrirCola(pc.pistas, pc.indice, pc.titulo) }
+                .setNegativeButton("Seguir guardando", null)
+                .show()
+            return
+        }
+        s.abrirCola(pc.pistas, pc.indice, pc.titulo)
+    }
+
+    // ---------------------------------------------------------------- orientación e insets
+
+    /** Automática (sigue el bloqueo de rotación del sistema), siempre horizontal o siempre vertical. */
+    private fun aplicarOrientacion() {
+        requestedOrientation = when (aj.orientacion) {
+            1 -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            2 -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            else -> ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+        }
+    }
+
+    override fun onConfigurationChanged(nueva: Configuration) {
+        super.onConfigurationChanged(nueva)
+        acomodar()
+        inmersivo()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun aplicarInsets(ins: WindowInsets) {
+        var izq = 0
+        var der = 0
+        var inf = 0
+        var sup = ins.systemWindowInsetTop
+        if (Build.VERSION.SDK_INT >= 28) {
+            val c = ins.displayCutout
+            if (c != null) {
+                izq = c.safeInsetLeft
+                der = c.safeInsetRight
+                inf = c.safeInsetBottom
+                sup = maxOf(sup, c.safeInsetTop)
+            }
+        }
+        if (izq != insIzq || der != insDer || inf != insInf || sup != insSup) {
+            insIzq = izq
+            insDer = der
+            insInf = inf
+            insSup = sup
+            acomodar()
+        }
+    }
+
+    /**
+     * Ajusta la interfaz a la orientación y a la muesca de la pantalla: márgenes laterales (en horizontal los bordes los
+     * usa el gesto «atrás»), anchos de los paneles y reparto de los botones (en vertical, dos filas).
+     */
+    private fun acomodar() {
+        val v = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+        val lat = if (v) dp(8) else dp(40)
+        barraSup.setPadding(maxOf(lat, insIzq), insSup + dp(4), maxOf(lat, insDer), dp(4))
+        val latInf = if (v) dp(8) else 0
+        barraInf.setPadding(maxOf(latInf, insIzq), 0, maxOf(latInf, insDer), insInf + (if (v) dp(16) else 0))
+        lpStats.leftMargin = maxOf(lat, insIzq)
+        lpStats.topMargin = insSup + dp(60)
+        panelStats.layoutParams = lpStats
+        val ls = barraSync.layoutParams as FrameLayout.LayoutParams
+        ls.rightMargin = maxOf(lat, insDer)
+        ls.topMargin = insSup + dp(60)
+        barraSync.layoutParams = ls
+        val ancho = resources.displayMetrics.widthPixels
+        val fraccion = if (v) 0.94f else 0.85f
+        val padDer = maxOf(if (v) dp(8) else dp(40), insDer)
+        fun panel(vista: View, maxDp: Int) {
+            val lp = vista.layoutParams as FrameLayout.LayoutParams
+            lp.width = minOf((ancho * fraccion).toInt(), dp(maxDp))
+            vista.layoutParams = lp
+            vista.setPadding(dp(8), insSup + dp(8), padDer, dp(8))
+        }
+        panel(panelArchivos, 420)
+        panel(panelCan.vista, 440)
+        panel(panelCola.vista, 440)
+        reubicarBotones(v)
+    }
+
+    private fun reubicarBotones(vertical: Boolean) {
+        filaBot.removeAllViews()
+        filaOpc.removeAllViews()
+        for (b in botonesTransporte) filaBot.addView(b, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val destino = if (vertical) filaOpc else filaBot
+        for (b in botonesOpciones) destino.addView(b, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        filaOpc.visibility = if (vertical) View.VISIBLE else View.GONE
+    }
+
+    private fun menuOrientacion() {
+        val nombres = listOf("Automática (según el bloqueo de rotación)", "Siempre horizontal", "Siempre vertical")
+        lista("Orientación", nombres.mapIndexed { i, n -> (if (i == aj.orientacion) "● " else "") + n }) {
+            aj.orientacion = it
+            aplicarOrientacion()
+        }
     }
 
     /** Abre una fuente nueva; si hay archivos guardándose de un torrent, pregunta antes de cancelarlos. */
@@ -189,11 +324,12 @@ class PlayerActivity : Activity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        if (panelCanAbierto) cerrarPanelCanales() else if (panelAbierto) cerrarPanel() else salir()
+        if (panelColaAbierto) cerrarPanelCola() else if (panelCanAbierto) cerrarPanelCanales() else if (panelAbierto) cerrarPanel() else salir()
     }
 
     override fun onStart() {
         super.onStart()
+        aplicarOrientacion()
         inmersivo()
         h.post(tic)
     }
@@ -343,24 +479,28 @@ class PlayerActivity : Activity() {
         filaSeek.addView(tiempoTv)
         barraInf.addView(filaSeek)
 
-        val filaBot = LinearLayout(this)
+        filaBot = LinearLayout(this)
         filaBot.orientation = LinearLayout.HORIZONTAL
         filaBot.gravity = Gravity.CENTER
-        fun w(v: View) = filaBot.addView(v, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        filaOpc = LinearLayout(this)
+        filaOpc.orientation = LinearLayout.HORIZONTAL
+        filaOpc.gravity = Gravity.CENTER
         btnAnt = boton("⏮") { svc?.anterior() }
         btnAnt.visibility = View.GONE
-        w(btnAnt)
-        w(boton("−10") { svc?.saltar(-10_000) })
+        botonesTransporte.add(btnAnt)
+        botonesTransporte.add(boton("−10") { svc?.saltar(-10_000) })
         btnPlay = boton("▶") { svc?.alternar() }
-        w(btnPlay)
-        w(boton("+10") { svc?.saltar(10_000) })
+        botonesTransporte.add(btnPlay)
+        botonesTransporte.add(boton("+10") { svc?.saltar(10_000) })
         btnSig = boton("⏭") { svc?.siguiente() }
         btnSig.visibility = View.GONE
-        w(btnSig)
-        w(boton("CC") { menuSubtitulos() })
-        w(boton("Audio") { menuAudio() })
-        w(boton("Aspecto") { menuAspecto() })
+        botonesTransporte.add(btnSig)
+        botonesOpciones.add(boton("CC") { menuSubtitulos() })
+        botonesOpciones.add(boton("Audio") { menuAudio() })
+        botonesOpciones.add(boton("Aspecto") { menuAspecto() })
         barraInf.addView(filaBot)
+        barraInf.addView(filaOpc)
+        reubicarBotones(false)
         raiz.addView(barraInf, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
 
         // Panel de estadísticas del torrent (arriba a la izquierda, pequeño y translúcido).
@@ -369,7 +509,7 @@ class PlayerActivity : Activity() {
         panelStats.setBackgroundColor(0x77000000)
         panelStats.setPadding(dp(8), dp(4), dp(8), dp(4))
         panelStats.visibility = View.GONE
-        val lpStats = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START)
+        lpStats = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START)
         lpStats.topMargin = dp(60)
         lpStats.leftMargin = dp(40)
         raiz.addView(panelStats, lpStats)
@@ -377,6 +517,11 @@ class PlayerActivity : Activity() {
         construirSync()
         construirPanel()
         construirPanelCanales()
+        construirPanelCola()
+        raiz.setOnApplyWindowInsetsListener { _, ins ->
+            aplicarInsets(ins)
+            ins
+        }
 
         // Gestos sobre el vídeo: un toque muestra/oculta controles, doble toque salta, deslizar = brillo / volumen.
         val gestos = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
@@ -455,8 +600,104 @@ class PlayerActivity : Activity() {
     private fun alternarPanel() {
         if (svc?.hayCanales == true) {
             if (panelCanAbierto) cerrarPanelCanales() else abrirPanelCanales()
+        } else if (svc?.hayCola == true) {
+            if (panelColaAbierto) cerrarPanelCola() else abrirPanelCola()
         } else {
             if (panelAbierto) cerrarPanel() else abrirPanel()
+        }
+    }
+
+    // ---------------------------------------------------------------- cola de reproducción
+
+    private fun construirPanelCola() {
+        panelCola = PanelCola(
+            this,
+            { i -> svc?.saltarACola(i) },
+            { i -> menuPistaCola(i) },
+            { svc?.let { it.fijarAleatorio(!it.aleatorio) } },
+            { svc?.let { it.fijarRepetir((it.repetir + 1) % 3) } },
+            { dialogoVaciarCola() },
+            { cerrarPanelCola() }
+        )
+        panelCola.vista.visibility = View.GONE
+        val ancho = minOf((resources.displayMetrics.widthPixels * 0.85f).toInt(), dp(440))
+        raiz.addView(panelCola.vista, FrameLayout.LayoutParams(ancho, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END))
+    }
+
+    private fun abrirPanelCola() {
+        val s = svc ?: return
+        if (!s.hayCola) return
+        panelCola.cargar(s.cola, s.colaActual, s.repetir, s.aleatorio, s.tituloCola)
+        panelCola.vista.visibility = View.VISIBLE
+        panelColaAbierto = true
+        mostrarCapa()
+    }
+
+    private fun cerrarPanelCola() {
+        panelCola.vista.visibility = View.GONE
+        panelColaAbierto = false
+    }
+
+    private fun menuPistaCola(i: Int) {
+        val s = svc ?: return
+        val p = s.cola.getOrNull(i) ?: return
+        val etiquetas = ArrayList<String>()
+        val acciones = ArrayList<() -> Unit>()
+        if (i != s.colaActual) {
+            etiquetas.add("Reproducir a continuación"); acciones.add { s.ponerSiguiente(i) }
+        }
+        if (i > 0) { etiquetas.add("Subir"); acciones.add { s.moverEnCola(i, -1) } }
+        if (i < s.cola.size - 1) { etiquetas.add("Bajar"); acciones.add { s.moverEnCola(i, 1) } }
+        etiquetas.add("Quitar de la cola"); acciones.add { s.quitarDeCola(i) }
+        lista(p.titulo, etiquetas) { acciones[it]() }
+    }
+
+    private fun dialogoVaciarCola() {
+        val s = svc ?: return
+        AlertDialog.Builder(this)
+            .setMessage("¿Vaciar la cola? Lo que suena ahora seguirá sonando.")
+            .setPositiveButton("Vaciar") { _, _ ->
+                s.vaciarCola()
+                cerrarPanelCola()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    /** El reproductor necesita acceso a la carpeta de la lista (o del audio): se explica y se abre el selector de carpetas. */
+    private fun dialogoCarpeta(s: PlaybackService, doc: Uri) {
+        val nombre = Utiles.nombreDe(this, doc.toString())
+        AlertDialog.Builder(this)
+            .setTitle("Acceso a la carpeta")
+            .setMessage(
+                "Para reproducir «" + nombre + "» junto con los demás archivos necesito acceso a su carpeta. " +
+                    "Elígela en la pantalla siguiente (basta con una vez: se recuerda). La carpeta puede ser la de la lista " +
+                    "o una que la contenga, por ejemplo «Música»."
+            )
+            .setPositiveButton("Elegir carpeta") { _, _ -> elegirCarpeta(doc) }
+            .setNegativeButton("Ahora no") { _, _ -> s.carpetaRechazada() }
+            .setOnCancelListener { s.carpetaRechazada() }
+            .show()
+    }
+
+    private fun elegirCarpeta(doc: Uri) {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+        i.addFlags(
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+        )
+        try {
+            val id = DocumentsContract.getDocumentId(doc)
+            val padre = if (id.contains('/')) id.substringBeforeLast('/') else id
+            i.putExtra(DocumentsContract.EXTRA_INITIAL_URI, DocumentsContract.buildDocumentUri(doc.authority, padre))
+        } catch (e: Exception) {
+            // Sin carpeta inicial: el selector abre donde quiera.
+        }
+        try {
+            Gestor.lanzar(this, i, PEDIR_CARPETA)
+        } catch (e: Exception) {
+            svc?.carpetaRechazada()
+            aviso("No hay selector de carpetas disponible")
         }
     }
 
@@ -911,6 +1152,7 @@ class PlayerActivity : Activity() {
             val ahoraProg = gu.ahora(canalAct)
             if (ahoraProg != null) tit += "  ·  " + ahoraProg.titulo
         }
+        if (s.hayCola && s.cola.size > 1 && s.colaActual >= 0) tit += "  ·  " + (s.colaActual + 1) + "/" + s.cola.size
         tituloTv.text = tit
 
         if (aj.mostrarStats && s.esTorrent && m != null && s.error == null && s.estado.isEmpty()) {
@@ -944,7 +1186,22 @@ class PlayerActivity : Activity() {
         btnAnt.visibility = if (conLista) View.VISIBLE else View.GONE
         btnSig.visibility = if (conLista) View.VISIBLE else View.GONE
         btnLista.visibility =
-            if ((s.esTorrent && s.archivosTorrent.isNotEmpty()) || s.hayCanales) View.VISIBLE else View.GONE
+            if ((s.esTorrent && s.archivosTorrent.isNotEmpty()) || s.hayCanales || s.hayCola) View.VISIBLE else View.GONE
+
+        if (panelColaAbierto) {
+            if (s.hayCola) panelCola.actualizar(s.cola, s.colaActual, s.repetir, s.aleatorio, s.tituloCola) else cerrarPanelCola()
+        }
+
+        // Falta acceso a la carpeta de la lista: se pide una vez.
+        val nc = s.necesitaCarpeta
+        if (nc != null) {
+            if (!pidiendoCarpeta) {
+                pidiendoCarpeta = true
+                dialogoCarpeta(s, nc)
+            }
+        } else {
+            pidiendoCarpeta = false
+        }
 
         // Lista de canales: el panel se abre solo al cargarla, hasta que se elija uno.
         if (s.hayCanales) {
@@ -973,8 +1230,15 @@ class PlayerActivity : Activity() {
 
         if (s.fin || s.error != null) {
             if (!capaVisible) mostrarCapa()
-        } else if (capaVisible && m?.isPlaying == true && SystemClock.uptimeMillis() > ocultarEn) {
-            ocultarCapa()
+        } else if (s.esAudioActual) {
+            // Con solo audio no hay imagen que ver: los controles se quedan a la vista.
+            if (!audioVisto) {
+                audioVisto = true
+                if (!capaVisible) mostrarCapa()
+            }
+        } else {
+            audioVisto = false
+            if (capaVisible && m?.isPlaying == true && SystemClock.uptimeMillis() > ocultarEn) ocultarCapa()
         }
     }
 
@@ -996,6 +1260,14 @@ class PlayerActivity : Activity() {
             etiquetas.add("Canales"); acciones.add { abrirPanelCanales() }
             etiquetas.add("Programación de este canal"); acciones.add { dialogoProgramacion() }
             etiquetas.add("Guía de programación…"); acciones.add { dialogoGuia() }
+        }
+        if (s.hayCola) {
+            etiquetas.add("Cola de reproducción (" + s.cola.size + ")"); acciones.add { abrirPanelCola() }
+        } else if (!s.esTorrent && !s.hayCanales && s.mp != null && (s.fuente?.uri ?: "").startsWith("content:")) {
+            etiquetas.add("Poner en cola el resto de la carpeta…"); acciones.add { s.pedirColaCarpeta() }
+        }
+        if (s.hayCanales && !(s.fuente?.uri ?: "").startsWith(Biblioteca.PREFIJO)) {
+            etiquetas.add("Guardar esta lista en la app"); acciones.add { guardarListaEnApp() }
         }
         etiquetas.add("Velocidad"); acciones.add { menuVelocidad() }
         etiquetas.add("Decodificación de vídeo"); acciones.add { menuDecodificacion() }
@@ -1024,9 +1296,32 @@ class PlayerActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 26) {
             etiquetas.add("Imagen en imagen"); acciones.add { entrarPip() }
         }
+        etiquetas.add("Orientación…"); acciones.add { menuOrientacion() }
         etiquetas.add("Ajustes"); acciones.add { startActivity(Intent(this, AjustesActivity::class.java)) }
         etiquetas.add("Cerrar reproductor"); acciones.add { salir() }
         lista("Opciones", etiquetas) { acciones[it]() }
+    }
+
+    /** Guarda la lista de canales que se está viendo en «Mis listas», para tenerla sin depender de la dirección. */
+    private fun guardarListaEnApp() {
+        val s = svc ?: return
+        val f = s.fuente ?: return
+        aviso("Guardando la lista…")
+        Thread {
+            try {
+                val txt = ListaM3u.leer(this, f) ?: throw java.io.IOException("No se pudo leer la lista")
+                val origen = if (f.uri.startsWith("http", true)) f.uri else ""
+                val r = Biblioteca.agregar(this, f.titulo, origen, txt)
+                h.post {
+                    aviso(
+                        if (r == null) "No se pudo guardar"
+                        else if (r.second) "Lista guardada en «Mis listas»" else "Lista actualizada en «Mis listas»"
+                    )
+                }
+            } catch (e: Exception) {
+                h.post { aviso("No se pudo guardar: " + (e.message ?: e.javaClass.simpleName)) }
+            }
+        }.start()
     }
 
     private fun menuVelocidad() {
@@ -1116,12 +1411,22 @@ class PlayerActivity : Activity() {
         val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
         i.addCategory(Intent.CATEGORY_OPENABLE)
         i.type = "*/*"
-        startActivityForResult(i, PEDIR_SUBTITULO)
+        Gestor.lanzar(this, i, PEDIR_SUBTITULO)
     }
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(codigo: Int, resultado: Int, datos: Intent?) {
         super.onActivityResult(codigo, resultado, datos)
+        if (codigo == PEDIR_CARPETA) {
+            val t = if (resultado == RESULT_OK) datos?.data else null
+            if (t != null) {
+                Carpetas.conservar(this, t)
+                svc?.carpetaConcedida(t)
+            } else {
+                svc?.carpetaRechazada()
+            }
+            return
+        }
         if (codigo != PEDIR_SUBTITULO || resultado != RESULT_OK) return
         val u = datos?.data ?: return
         Thread {
