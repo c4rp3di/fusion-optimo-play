@@ -246,6 +246,21 @@ object Informacion {
             val segs = ls.filter { !it.startsWith("#") }
             val relleno = segs.count { it.contains("placeholder", true) }
             sb.append("  Trozos de relleno (placeholder): ").append(relleno).append(" de ").append(segs.size).append('\n')
+            // Se mira cada trozo distinto: ¿trae algún subtítulo (línea con «-->») o todos están vacíos?
+            val distintos = segs.map { URL(URL(urlLista), it).toString() }.distinct().take(8)
+            var conTexto = 0
+            for ((n, d) in distintos.withIndex()) {
+                val rr = try { pedir(d, f, 65536) } catch (e: Exception) { null }
+                if (rr == null) {
+                    sb.append("    · trozo ").append(n + 1).append(": error al bajarlo\n")
+                    continue
+                }
+                val cues = Regex("-->").findAll(String(rr.cuerpo, Charsets.UTF_8)).count()
+                if (cues > 0) conTexto++
+                sb.append("    · trozo ").append(n + 1).append(": ").append(recortar(d.substringAfterLast('/').substringBefore('?'), 40))
+                    .append(" · ").append(cues).append(" subtítulos\n")
+            }
+            sb.append("  Trozos distintos con subtítulos: ").append(conTexto).append(" de ").append(distintos.size).append('\n')
             sb.append("  Segmentos de subtítulos: ").append(segs.size)
             sb.append(if (ls.any { it.startsWith("#EXT-X-ENDLIST") }) " (completa)" else " (directo)").append('\n')
             if (ls.any { it.startsWith("#EXT-X-MAP") }) sb.append("  Usa EXT-X-MAP (subtítulos en MP4/TTML): libVLC 3 no los lee bien.\n")
