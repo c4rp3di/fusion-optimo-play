@@ -820,8 +820,12 @@ class PlaybackService : Service() {
         mp = m
     }
 
+    private var maestro: MaestroLimpio? = null
+
     private fun destruirReproductor() {
         main.removeCallbacks(vigilanteInicio)
+        maestro?.detener()
+        maestro = null
         val m = mp
         val v = libvlc
         mp = null
@@ -860,6 +864,13 @@ class PlaybackService : Service() {
             }
             pfd = p
             media = Media(v, p.fileDescriptor)
+        } else if ((uri.scheme == "http" || uri.scheme == "https") && canales.isNotEmpty() && url.contains("m3u8", true)) {
+            // Canal HLS: libVLC abre un manifiesto local que es el original con los trozos de subtítulos de relleno
+            // neutralizados (o sin las pistas de subtítulos, si así se ha pedido). Si no hay nada que arreglar, redirige al original.
+            maestro?.detener()
+            val ml = MaestroLimpio(url, f.referer, f.ua, ajustes.sinSubsCanales || sinSubsTemporal)
+            maestro = ml
+            media = Media(v, Uri.parse(ml.iniciar()))
         } else {
             media = Media(v, uri)
         }
@@ -872,7 +883,6 @@ class PlaybackService : Service() {
             media.addOption(":network-caching=2500")
             f.referer?.let { media.addOption(":http-referrer=$it") }
             f.ua?.let { media.addOption(":http-user-agent=$it") }
-            if ((ajustes.sinSubsCanales || sinSubsTemporal) && canales.isNotEmpty()) media.addOption(":no-spu")
         }
         m.setMedia(media)
         media.release()
@@ -1580,7 +1590,7 @@ class PlaybackService : Service() {
     fun elegirSubtitulo(id: Int) {
         val m = mp ?: return
         val t0 = try { m.time } catch (e: Throwable) { 0L }
-        try { m.setSpuTrack(id) } catch (e: Throwable) { return }
+        Thread { try { m.setSpuTrack(id) } catch (e: Throwable) { /* nada */ } }.start()
         if (id < 0 || emisor != null) return
         main.postDelayed({
             val mm = mp ?: return@postDelayed
@@ -1589,7 +1599,7 @@ class PlaybackService : Service() {
                 val t1 = mm.time
                 val pausado = mm.playerState == IMedia.State.Paused
                 if (!pausado && t1 <= t0 + 1000L) {
-                    mm.setSpuTrack(-1)
+                    Thread { try { mm.setSpuTrack(-1) } catch (e: Throwable) { /* nada */ } }.start()
                     avisoUi = "Esa pista de subtítulos bloquea el canal: se ha desactivado"
                     // Si aun así sigue congelado, se reabre el canal sin cargar subtítulos incluidos.
                     main.postDelayed({
