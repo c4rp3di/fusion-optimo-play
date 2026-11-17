@@ -171,7 +171,7 @@ class MaestroLimpio(
             if (l.isEmpty()) continue
             if (l.startsWith("#")) {
                 sal.append(reUri.replace(l) { m -> "URI=\"" + absoluta(base, m.groupValues[1]) + "\"" }).append('\n')
-            } else if (l.contains("placeholder", true)) {
+            } else if (l.contains("placeholder", true) || l.contains("empty_sub", true)) {
                 sal.append(base() + "vacio.vtt").append('\n')
             } else {
                 sal.append(absoluta(base, l)).append('\n')
