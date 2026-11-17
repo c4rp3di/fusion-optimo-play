@@ -233,6 +233,7 @@ class PlaybackService : Service() {
 
     /** Empieza a reproducir una fuente nueva (URL, archivo, magnet o .torrent). */
     fun abrir(f: Fuente) {
+        sinSubsTemporal = false
         guardarPos()
         hiloTorrent?.interrupt()
         motor.cerrar()
@@ -735,6 +736,7 @@ class PlaybackService : Service() {
     fun elegirCanal(i: Int) {
         val lista = canales
         if (i !in lista.indices) return
+        sinSubsTemporal = false
         val lf = fuente ?: return
         val c = lista[i]
         necesitaElegirCanal = false
@@ -870,6 +872,7 @@ class PlaybackService : Service() {
             media.addOption(":network-caching=2500")
             f.referer?.let { media.addOption(":http-referrer=$it") }
             f.ua?.let { media.addOption(":http-user-agent=$it") }
+            if ((ajustes.sinSubsCanales || sinSubsTemporal) && canales.isNotEmpty()) media.addOption(":no-spu")
         }
         m.setMedia(media)
         media.release()
@@ -1565,6 +1568,54 @@ class PlaybackService : Service() {
             val p = em.estado().posMs
             main.post { if (emisor === em) emitirA(d, p) }
         }
+    }
+
+    /**
+     * Elige una pista de subtítulos. En los directos (HLS) algunas pistas dejan el canal congelado; si a los 7 s
+     * la imagen no avanza, se quita la pista y se avisa.
+     */
+    /** Los subtítulos incluidos congelaron este canal: se reabre sin ellos hasta cambiar de canal. */
+    @Volatile private var sinSubsTemporal = false
+
+    fun elegirSubtitulo(id: Int) {
+        val m = mp ?: return
+        val t0 = try { m.time } catch (e: Throwable) { 0L }
+        try { m.setSpuTrack(id) } catch (e: Throwable) { return }
+        if (id < 0 || emisor != null) return
+        main.postDelayed({
+            val mm = mp ?: return@postDelayed
+            if (mm !== m || emisor != null) return@postDelayed
+            try {
+                val t1 = mm.time
+                val pausado = mm.playerState == IMedia.State.Paused
+                if (!pausado && t1 <= t0 + 1000L) {
+                    mm.setSpuTrack(-1)
+                    avisoUi = "Esa pista de subtítulos bloquea el canal: se ha desactivado"
+                    // Si aun así sigue congelado, se reabre el canal sin cargar subtítulos incluidos.
+                    main.postDelayed({
+                        val m2 = mp ?: return@postDelayed
+                        if (m2 !== m || emisor != null) return@postDelayed
+                        try {
+                            val t2 = m2.time
+                            if (m2.playerState != IMedia.State.Paused && t2 <= t1 + 500L) {
+                                val f = fuenteActiva
+                                val u = ultimaUrl
+                                if (f != null && u != null) {
+                                    sinSubsTemporal = true
+                                    posReanudar = 0L
+                                    reproducir(u, f)
+                                    avisoUi = "Canal reabierto sin los subtítulos incluidos (bloqueaban la imagen)"
+                                }
+                            }
+                        } catch (e: Throwable) {
+                            // Reproductor liberado entre medias.
+                        }
+                    }, 4000L)
+                }
+            } catch (e: Throwable) {
+                // Reproductor liberado entre medias.
+            }
+        }, 7000L)
     }
 
     /** Desfase de los subtítulos en milisegundos (positivo = más tarde). */
