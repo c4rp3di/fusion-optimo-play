@@ -41,7 +41,20 @@ class MotorTorrent(private val ctx: Context) {
         private set
 
     private var sm: SessionManager? = null
+    /** Marca de «hay un torrent abierto». Los métodos nativos NO usan este objeto: piden un handle nuevo con [handle]. */
     @Volatile private var th: TorrentHandle? = null
+    @Volatile private var hashActual: Sha1Hash? = null
+
+    /**
+     * Handle recién pedido a la sesión por info-hash (null si el torrent ya no existe). Guardar y compartir entre hilos un
+     * mismo objeto TorrentHandle acabó en un fallo nativo (SIGSEGV en torrent_handle::is_valid), así que cada uso pide el suyo.
+     */
+    private fun handle(): TorrentHandle? {
+        if (th == null) return null
+        val s = sm ?: return null
+        val hs = hashActual ?: return null
+        return try { s.find(hs) } catch (e: Throwable) { null }
+    }
     @Volatile private var info: TorrentInfo? = null
     private var piezasCabeza = 1
     private var piezasCola = 1
@@ -61,7 +74,7 @@ class MotorTorrent(private val ctx: Context) {
 
     /** Marca (o desmarca) un archivo para guardarlo entero. Un archivo ya copiado o copiándose no se toca. */
     fun marcarGuardar(a: ArchivoTorrent, si: Boolean) {
-        val h = th ?: return
+        val h = handle() ?: return
         try {
             if (si) {
                 val st = guardado[a.indice]
@@ -84,7 +97,7 @@ class MotorTorrent(private val ctx: Context) {
     /** % de piezas de este archivo que ya están descargadas (se recalcula como mucho cada 2 s). */
     @Synchronized
     fun progresoArchivo(a: ArchivoTorrent): Int {
-        val h = th ?: return 0
+        val h = handle() ?: return 0
         val ti = info ?: return 0
         val ahora = System.currentTimeMillis()
         val c = cacheArchivo[a.indice]
@@ -236,6 +249,7 @@ class MotorTorrent(private val ctx: Context) {
     fun abrir(origen: String, archivoTorrent: File?, estado: (String) -> Unit): List<ArchivoTorrent> {
         cerrar()
         cancelado = false
+        val gen = generacion
         val s = sesion()
         val d = File(ctx.cacheDir, "torrent/" + System.currentTimeMillis())
         d.mkdirs()
@@ -257,27 +271,31 @@ class MotorTorrent(private val ctx: Context) {
         var h: TorrentHandle? = null
         val limite = System.currentTimeMillis() + 30_000
         while (h == null) {
-            if (cancelado) throw InterruptedException()
+            if (cancelado || generacion != gen) throw InterruptedException()
             h = try { s.find(hash) } catch (e: Exception) { null }
             if (h != null) break
             if (System.currentTimeMillis() > limite) throw IOException("No se pudo añadir el torrent")
             Thread.sleep(200)
         }
         val hOk: TorrentHandle = h ?: throw IOException("No se pudo añadir el torrent")
+        hashActual = hash
         th = hOk
-        if (archivoTorrent != null) hOk.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
-        hOk.resume()
+        val hIni = handle() ?: throw InterruptedException()
+        if (archivoTorrent != null) hIni.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
+        hIni.resume()
 
         val inicio = System.currentTimeMillis()
         var ti: TorrentInfo? = null
         while (ti == null) {
-            if (cancelado) throw InterruptedException()
-            ti = try { hOk.torrentFile() } catch (e: Exception) { null }
+            if (cancelado || generacion != gen) throw InterruptedException()
+            // Un handle nuevo en cada vuelta: si otro hilo cerró el torrent, find() devuelve null y se sale sin tocar memoria nativa.
+            val hh = handle() ?: throw InterruptedException()
+            ti = try { hh.torrentFile() } catch (e: Exception) { null }
             if (ti != null) break
             if (System.currentTimeMillis() - inicio > 180_000) {
                 throw IOException("Sin metadatos tras 3 minutos (¿hay peers o trackers vivos?)")
             }
-            val peers = try { hOk.status().numPeers() } catch (e: Exception) { 0 }
+            val peers = try { hh.status().numPeers() } catch (e: Exception) { 0 }
             estado("Buscando metadatos… $peers peers")
             Thread.sleep(700)
         }
@@ -296,7 +314,7 @@ class MotorTorrent(private val ctx: Context) {
 
     /** Descarga solo este archivo y prioriza su principio y su final. */
     fun seleccionar(a: ArchivoTorrent) {
-        val h = th ?: throw IOException("Torrent no iniciado")
+        val h = handle() ?: throw IOException("Torrent no iniciado")
         val ti = info ?: throw IOException("Torrent sin metadatos")
         archivo = a
         val n = ti.files().numFiles()
@@ -323,7 +341,7 @@ class MotorTorrent(private val ctx: Context) {
 
     /** ¿Ya están las piezas de arranque (principio y final del archivo)? */
     fun listo(): Boolean {
-        val h = th ?: return false
+        val h = handle() ?: return false
         val ti = info ?: return false
         val a = archivo ?: return false
         if (!h.isValid) return false
@@ -336,7 +354,7 @@ class MotorTorrent(private val ctx: Context) {
     }
 
     fun resumen(): String {
-        val h = th ?: return "Conectando…"
+        val h = handle() ?: return "Conectando…"
         return try {
             val st = h.status()
             "Torrent · ${st.numPeers()} peers · ${st.downloadRate() / 1024} KB/s · preparando buffer…"
@@ -384,7 +402,7 @@ class MotorTorrent(private val ctx: Context) {
      * `frac` es la posición de reproducción (0..1) y `durMs` la duración, para estimar los segundos de buffer.
      */
     fun estadisticasDetalle(frac: Double, durMs: Long): String {
-        val h = th ?: return ""
+        val h = handle() ?: return ""
         val ti = info ?: return ""
         val a = archivo ?: return ""
         return try {
@@ -417,7 +435,7 @@ class MotorTorrent(private val ctx: Context) {
 
     /** Estadísticas cortas para mostrar mientras se reproduce. */
     fun estadisticas(): String {
-        val h = th ?: return ""
+        val h = handle() ?: return ""
         return try {
             val st = h.status()
             "${st.numPeers()} peers · ${st.downloadRate() / 1024} KB/s · ${(st.progress() * 100).toInt()}%"
@@ -431,7 +449,7 @@ class MotorTorrent(private val ctx: Context) {
      * junto con las siguientes. False si se cancela o se agota el tiempo (unos 3 minutos).
      */
     fun esperarRango(a: ArchivoTorrent, pos: Long, n: Long): Boolean {
-        val h = th ?: return false
+        val h = handle() ?: return false
         val ti = info ?: return false
         val pl = ti.pieceLength().toLong()
         val p0 = ((a.offset + pos) / pl).toInt()
@@ -469,12 +487,13 @@ class MotorTorrent(private val ctx: Context) {
     fun cerrar() {
         cancelado = true
         generacion++
-        val h = th
+        val h = handle()
         val s = sm
         if (h != null && s != null) {
             try { s.remove(h) } catch (e: Exception) { /* ya no existe */ }
         }
         th = null
+        hashActual = null
         info = null
         archivo = null
         guardado.clear()
