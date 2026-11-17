@@ -129,6 +129,16 @@ object Informacion {
 
         sb.append('\n').append("Pistas:\n")
         sb.append(pistas(m))
+        try {
+            val au = m?.audioTracks
+            if (au != null) {
+                sb.append("\nAudio en el menú (preferido: ").append(s.ajustes.audioPreferido.ifEmpty { "automático" }).append("):\n")
+                val actual = m?.audioTrack ?: -1
+                for (p in au) sb.append("  ").append(if (p.id == actual) "● " else "  ").append(p.id).append(" · ").append(p.name).append('\n')
+            }
+        } catch (e: Throwable) {
+            // Sin lista de pistas.
+        }
         return sb.toString()
     }
 
