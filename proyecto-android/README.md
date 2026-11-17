@@ -156,3 +156,9 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 
 - Si al elegir un subtítulo incluido en un canal la imagen se congela y quitar la pista no la despierta, el canal se reabre solo
   sin subtítulos incluidos (hasta cambiar de canal) y se avisa.
+
+## 0.6.6 — Cierre inesperado al abrir un torrent
+
+- Corregido un fallo nativo (SIGSEGV en `torrent_handle::is_valid`, desde `MotorTorrent.abrir`): el torrent se seguía consultando con un objeto
+  `TorrentHandle` compartido entre hilos mientras otro lo cerraba. Ahora cada consulta pide su propio handle por info-hash y, si el torrent ya no
+  existe o se abrió otro, el hilo antiguo sale sin tocar memoria nativa.
