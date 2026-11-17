@@ -101,3 +101,9 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - **Audio › Audio preferido:** elige solo la pista al empezar (también en canales): automático, la primera pista (suele ser el original) o un idioma
   (inglés, español, francés, alemán, italiano, portugués, japonés, coreano). Si eliges una pista a mano, esa manda.
 - **Información** muestra la lista de pistas de audio tal como las ve el menú (id y nombre).
+
+## 0.5.2
+
+- **Información › Sondeo del flujo HLS:** para URLs HLS baja el manifiesto, la lista de la primera variante y el primer segmento, y muestra qué responde
+  el servidor en cada paso (variantes y resoluciones, nº de segmentos, publicidad/cifrado, código del segmento). Sirve para saber por qué un canal se
+  queda en «Cargando 0 %».
