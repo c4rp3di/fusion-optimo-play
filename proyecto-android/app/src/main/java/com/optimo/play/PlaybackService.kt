@@ -170,8 +170,8 @@ class PlaybackService : Service() {
 
         val s = MediaSession(this, "OptimoPlay")
         s.setCallback(object : MediaSession.Callback() {
-            override fun onPlay() { mp?.play() }
-            override fun onPause() { mp?.pause() }
+            override fun onPlay() { if (emisor != null) emisor?.reproducir() else mp?.play() }
+            override fun onPause() { if (emisor != null) emisor?.pausar() else mp?.pause() }
             override fun onStop() { detener() }
             override fun onSeekTo(pos: Long) { mp?.setTime(pos) }
             override fun onSkipToNext() { siguiente() }
@@ -200,6 +200,7 @@ class PlaybackService : Service() {
         guardarPos()
         try { unregisterReceiver(ruidoso) } catch (e: Exception) { /* nada */ }
         hiloTorrent?.interrupt()
+        volverALocal(false)
         destruirReproductor()
         liberarBloqueos()
         abandonarFoco()
@@ -232,6 +233,7 @@ class PlaybackService : Service() {
 
     /** Empieza a reproducir una fuente nueva (URL, archivo, magnet o .torrent). */
     fun abrir(f: Fuente) {
+        volverALocal(false)
         guardarPos()
         hiloTorrent?.interrupt()
         motor.cerrar()
@@ -734,6 +736,7 @@ class PlaybackService : Service() {
     fun elegirCanal(i: Int) {
         val lista = canales
         if (i !in lista.indices) return
+        volverALocal(false)
         val lf = fuente ?: return
         val c = lista[i]
         necesitaElegirCanal = false
@@ -925,6 +928,7 @@ class PlaybackService : Service() {
     /** El usuario eligió un archivo concreto del torrent (también sirve para cambiar de capítulo). */
     fun elegirArchivoTorrent(indice: Int) {
         val a = archivosTorrent.firstOrNull { it.indice == indice } ?: return
+        volverALocal(false)
         necesitaElegir = false
         objetivoTorrent = a
         fin = false
@@ -1106,19 +1110,141 @@ class PlaybackService : Service() {
         if (elegida != null && elegida.id != m.audioTrack) m.setAudioTrack(elegida.id)
     }
 
+    // ---------------------------------------------------------------- enviar a la tele (DLNA / Chromecast)
+
+    /** Pantalla remota activa; null si se reproduce en el móvil. */
+    @Volatile var emisor: Emisor? = null
+        private set
+    @Volatile var destinoEmision: Destino? = null
+        private set
+    private var lan: ServidorLan? = null
+
+    /** Manda lo que suena a una tele. El móvil se queda sirviendo el archivo si es del torrent o del dispositivo. */
+    fun emitirA(d: Destino) {
+        val f = fuenteActiva ?: fuente
+        val url0 = ultimaUrl
+        if (f == null || url0 == null) {
+            avisoUi = "No hay nada reproduciéndose que enviar"
+            return
+        }
+        val m = mp
+        val pos = try { m?.time ?: 0L } catch (e: Throwable) { 0L }
+        val len = try { m?.length ?: 0L } catch (e: Throwable) { 0L }
+        val directo = len <= 0L
+        volverALocal(false)
+        val srv = ServidorLan(this) { motor }
+        var url: String? = null
+        var mime = "video/mp4"
+        val ta = archivoTorrentActual
+        if (esTorrent) {
+            if (ta == null) {
+                avisoUi = "El torrent aún no está listo para enviarlo"
+                return
+            }
+            url = srv.urlTorrent(ta)
+            mime = Utiles.tipoMime(ta.nombre)
+        } else if (url0.startsWith("http", true)) {
+            url = url0
+            mime = Utiles.mimeDeUrl(url0)
+            if (!f.referer.isNullOrBlank()) {
+                avisoUi = "Esta dirección exigía cabeceras especiales (Referer): la tele puede que no consiga abrirla"
+            }
+        } else if (url0.startsWith("content:", true) || url0.startsWith("file:", true)) {
+            var nombre = f.titulo
+            if (!nombre.contains('.')) nombre += ".mp4"
+            url = srv.urlArchivo(Uri.parse(url0), nombre)
+            val t = Utiles.tipoMime(nombre)
+            mime = if (t == "application/octet-stream") "video/mp4" else t
+        }
+        if (url == null) {
+            srv.detener()
+            avisoUi = "No se pudo enviar: el móvil no está conectado a una red Wi-Fi"
+            return
+        }
+        val e: Emisor = try {
+            if (d.tipo == Destino.DLNA) Dlna.EmisorDlna(d.datos as DlnaDispositivo)
+            else CastGoogle.EmisorCast(applicationContext, d.datos as androidx.mediarouter.media.MediaRouter.RouteInfo)
+        } catch (t: Throwable) {
+            srv.detener()
+            avisoUi = "No se pudo conectar con " + d.nombre
+            return
+        }
+        lan = srv
+        emisor = e
+        destinoEmision = d
+        main.removeCallbacks(vigilanteInicio)
+        try { m?.pause() } catch (t: Throwable) { /* nada */ }
+        tomarBloqueos()
+        e.cargar(url, mime, titulo.ifEmpty { f.titulo }, directo, pos)
+        actualizarSesion()
+        notificar()
+    }
+
+    /** Deja de emitir. Con [reanudar] el móvil sigue por donde iba la tele. */
+    fun volverALocal(reanudar: Boolean = true) {
+        val e = emisor
+        emisor = null
+        destinoEmision = null
+        val st = try { e?.estado() } catch (t: Throwable) { null }
+        try { e?.parar() } catch (t: Throwable) { /* nada */ }
+        lan?.detener()
+        lan = null
+        if (e == null) return
+        val m = mp
+        if (reanudar && m != null) {
+            val directo = try { m.length <= 0L } catch (t: Throwable) { true }
+            val f = fuenteActiva ?: fuente
+            val u = ultimaUrl
+            if (directo && f != null && u != null) {
+                reproducir(u, f)
+            } else {
+                val p = st?.posMs ?: 0L
+                try { if (p > 0L) m.setTime(p) } catch (t: Throwable) { /* nada */ }
+                try { m.play() } catch (t: Throwable) { /* nada */ }
+            }
+        }
+        if (reanudar && mp == null && !hayGuardadoPendiente()) {
+            // Se emitía en segundo plano y no queda nada local: el servicio ya no hace falta.
+            detener()
+            return
+        }
+        actualizarSesion()
+        notificar()
+    }
+
+    fun emisorAlternar() {
+        val e = emisor ?: return
+        if (e.estado().pausa) e.reproducir() else e.pausar()
+    }
+
+    fun emisorSaltar(ms: Long) {
+        val e = emisor ?: return
+        val s = e.estado()
+        var destino = (s.posMs + ms).coerceAtLeast(0L)
+        if (s.durMs > 2000L) destino = minOf(destino, s.durMs - 1500L).coerceAtLeast(0L)
+        e.buscar(destino)
+    }
+
+    fun emisorBuscar(ms: Long) {
+        emisor?.buscar(ms)
+    }
+
     // ---------------------------------------------------------------- controles
 
     fun alternar() {
+        if (emisor != null) { emisorAlternar(); return }
         val m = mp ?: return
         if (m.isPlaying) m.pause() else m.play()
     }
 
     fun pausar() {
+        if (emisor != null) return
         val m = mp ?: return
         if (m.isPlaying) m.pause()
     }
 
     fun saltar(ms: Long) {
+        if (emisor != null) { emisorSaltar(ms); return }
         val m = mp ?: return
         val len = m.length
         val destino = (m.time + ms).coerceAtLeast(0L)
@@ -1127,6 +1253,7 @@ class PlaybackService : Service() {
 
     /** Detiene todo, borra lo descargado y cierra el servicio. */
     fun detener() {
+        volverALocal(false)
         guardarPos()
         hiloTorrent?.interrupt()
         motor.cerrar()
@@ -1370,7 +1497,7 @@ class PlaybackService : Service() {
         }
         main.post {
             if (motor.generacion == gen && motor.pendientesGuardar() == 0) {
-                if (mp == null) detener() else if (mp?.isPlaying != true) soltarBloqueos()
+                if (emisor != null) { /* se sigue emitiendo */ } else if (mp == null) detener() else if (mp?.isPlaying != true) soltarBloqueos()
                 if (mp != null) notificar()
             }
         }
@@ -1497,7 +1624,7 @@ class PlaybackService : Service() {
         }
         if (wake?.isHeld != true) wake?.acquire(6L * 60 * 60 * 1000)
         val u = fuente?.uri ?: ""
-        val enRed = esTorrent || u.startsWith("http", true)
+        val enRed = esTorrent || u.startsWith("http", true) || emisor != null
         if (enRed) {
             if (wifi == null) {
                 val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -1511,7 +1638,7 @@ class PlaybackService : Service() {
 
     /** Mientras se estén guardando archivos no se sueltan los bloqueos (la descarga sigue con la pantalla apagada). */
     private fun liberarBloqueos() {
-        if (hayGuardadoPendiente()) return
+        if (hayGuardadoPendiente() || emisor != null) return
         soltarBloqueos()
     }
 
@@ -1570,6 +1697,7 @@ class PlaybackService : Service() {
 
         val guardando = if (esTorrent) resumenGuardado() else ""
         val texto = when {
+            emisor != null -> "Emitiendo a " + (destinoEmision?.nombre ?: "la tele")
             error != null -> error!!
             estado.isNotEmpty() -> estado
             mp == null && guardando.isNotEmpty() -> "Guardando en el dispositivo: $guardando"
