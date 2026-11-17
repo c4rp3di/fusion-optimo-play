@@ -27,6 +27,7 @@ class AjustesActivity : Activity() {
     private lateinit var cAuto: CheckBox
     private lateinit var cSegundoPlano: CheckBox
     private lateinit var cColaAuto: CheckBox
+    private lateinit var cSinSubsCanales: CheckBox
     private lateinit var cGestor: CheckBox
     private lateinit var grupoOrient: RadioGroup
 
@@ -74,6 +75,11 @@ class AjustesActivity : Activity() {
         nota1.textSize = 12f
         nota1.alpha = 0.7f
         col.addView(nota1)
+
+        cSinSubsCanales = CheckBox(this)
+        cSinSubsCanales.text = "Ignorar subtítulos incluidos en los canales (si algún canal se queda parado al tener subtítulos)"
+        cSinSubsCanales.isChecked = aj.sinSubsCanales
+        col.addView(cSinSubsCanales)
 
         titulo("Orientación del reproductor")
         grupoOrient = RadioGroup(this)
@@ -178,6 +184,7 @@ class AjustesActivity : Activity() {
         aj.subAuto = cAuto.isChecked
         aj.segundoPlano = cSegundoPlano.isChecked
         aj.colaAuto = cColaAuto.isChecked
+        aj.sinSubsCanales = cSinSubsCanales.isChecked
         aj.usarGestor = cGestor.isChecked
         val elegido = grupoOrient.indexOfChild(grupoOrient.findViewById<View>(grupoOrient.checkedRadioButtonId))
         if (elegido >= 0) aj.orientacion = elegido
