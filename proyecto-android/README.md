@@ -95,3 +95,9 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - **Torrents sin duplicados**: lo que ya está en Descargas/OptimoPlay (misma ruta y tamaño) se marca «✓ guardado» y no se vuelve a bajar; al copiar se sustituye en vez de crear «nombre (1)».
 - **Descargas**: gestiona lo guardado de torrents (por carpetas): reproducir, borrar archivo o carpeta, y borrar de una vez las copias «(1)» sobrantes de versiones anteriores. Límite de Android 10+: tras reinstalar, la app no ve lo guardado por la instalación anterior.
 - **Gestor de archivos propio** (`com.carpe.gestorarchivos`): si está instalado, todo lo de elegir archivos y carpetas (abrir archivo, varios archivos, carpetas con acceso, importar listas, subtítulos) se pide directamente a él en vez de al selector del sistema (desactivable en Ajustes). Como el gestor adivina el tipo por la extensión y no conoce `.m3u`/`.torrent`, con él no se manda filtro de tipos. «Descargas» tiene un botón para ver la carpeta de OptimoPlay en el gestor.
+
+## 0.5.1 — Audio preferido (fusión con la 0.5.0)
+
+- **Audio › Audio preferido:** elige solo la pista al empezar (también en canales): automático, la primera pista (suele ser el original) o un idioma
+  (inglés, español, francés, alemán, italiano, portugués, japonés, coreano). Si eliges una pista a mano, esa manda.
+- **Información** muestra la lista de pistas de audio tal como las ve el menú (id y nombre).
