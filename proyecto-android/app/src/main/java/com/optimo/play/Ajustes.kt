@@ -95,6 +95,11 @@ class Ajustes(ctx: Context) {
         get() = sp.getBoolean("stats", true)
         set(v) { sp.edit().putBoolean("stats", v).apply() }
 
+    /** Pista de audio que se elige sola: "" automática, "primera" (suele ser el original) o un idioma (en, es, fr…). */
+    var audioPreferido: String
+        get() = sp.getString("audio_pref", "") ?: ""
+        set(v) { sp.edit().putString("audio_pref", v).apply() }
+
     var segundoPlano: Boolean
         get() = sp.getBoolean("segundo_plano", true)
         set(v) { sp.edit().putBoolean("segundo_plano", v).apply() }
