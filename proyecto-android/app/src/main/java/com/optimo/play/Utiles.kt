@@ -1,6 +1,7 @@
 package com.optimo.play
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
@@ -105,6 +106,36 @@ object Utiles {
             }
         }
         return (x.length - i) - (y.length - j)
+    }
+
+    /** Dirección IPv4 del móvil en la red local (Wi-Fi), o null si no hay. */
+    fun ipLan(ctx: Context): String? {
+        return try {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val red = cm.activeNetwork ?: return null
+            val lp = cm.getLinkProperties(red) ?: return null
+            for (la in lp.linkAddresses) {
+                val a = la.address
+                if (a is java.net.Inet4Address && !a.isLoopbackAddress) return a.hostAddress
+            }
+            null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Tipo MIME de una URL remota (para decírselo a la tele). */
+    fun mimeDeUrl(url: String): String {
+        val ruta = url.substringBefore('?').substringBefore('#').lowercase()
+        return when {
+            ruta.endsWith(".m3u8") -> "application/vnd.apple.mpegurl"
+            ruta.endsWith(".mpd") -> "application/dash+xml"
+            ruta.endsWith(".ts") -> "video/mp2t"
+            ruta.endsWith(".mkv") -> "video/x-matroska"
+            ruta.endsWith(".webm") -> "video/webm"
+            ruta.endsWith(".mp3") -> "audio/mpeg"
+            else -> "video/mp4"
+        }
     }
 
     /** Tipo MIME aproximado para el servidor local del torrent. */
