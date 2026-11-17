@@ -1,6 +1,7 @@
 package com.optimo.play
 
 import android.content.Context
+import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
 import androidx.mediarouter.media.MediaRouteSelector
@@ -9,6 +10,8 @@ import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
 import com.google.android.gms.cast.MediaStatus
+import com.google.android.gms.cast.MediaTrack
+import com.google.android.gms.cast.TextTrackStyle
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
@@ -58,10 +61,12 @@ object CastGoogle {
 
         private val ui = Handler(Looper.getMainLooper())
         @Volatile private var est = EstadoRemoto(true, false, false, false, 0L, 0L, null)
-        private var pendiente: Array<Any>? = null
+        private var pendiente: Array<Any?>? = null
+        private var escuchando = false
         private var cliente: RemoteMediaClient? = null
         private var vivo = true
         private var haSonado = false
+        private var registrado = false
 
         private val progreso = RemoteMediaClient.ProgressListener { pos, dur ->
             val e = est
@@ -121,31 +126,57 @@ object CastGoogle {
                 return
             }
             pendiente = null
+            if (cliente !== c || !registrado) {
+                registrado = true
+                try { c.registerCallback(llamada) } catch (e: Throwable) { /* nada */ }
+                try { c.addProgressListener(progreso, 1000L) } catch (e: Throwable) { /* nada */ }
+            }
             cliente = c
-            try { c.registerCallback(llamada) } catch (e: Throwable) { /* nada */ }
-            try { c.addProgressListener(progreso, 1000L) } catch (e: Throwable) { /* nada */ }
+            haSonado = false
             val meta = MediaMetadata(MediaMetadata.MEDIA_TYPE_MOVIE)
             meta.putString(MediaMetadata.KEY_TITLE, p[2] as String)
-            val info = MediaInfo.Builder(p[0] as String)
+            val ib = MediaInfo.Builder(p[0] as String)
                 .setStreamType(if (p[3] as Boolean) MediaInfo.STREAM_TYPE_LIVE else MediaInfo.STREAM_TYPE_BUFFERED)
                 .setContentType(p[1] as String)
                 .setMetadata(meta)
-                .build()
+            val subs = p[5] as String?
+            if (subs != null) {
+                val pista = MediaTrack.Builder(1L, MediaTrack.TYPE_TEXT)
+                    .setContentId(subs)
+                    .setContentType("text/vtt")
+                    .setSubtype(MediaTrack.SUBTYPE_SUBTITLES)
+                    .setName("Subtítulos")
+                    .setLanguage("es")
+                    .build()
+                ib.setMediaTracks(listOf(pista))
+                val estilo = TextTrackStyle()
+                estilo.setForegroundColor(Color.WHITE)
+                estilo.setBackgroundColor(0x99000000.toInt())
+                estilo.setEdgeType(TextTrackStyle.EDGE_TYPE_OUTLINE)
+                estilo.setEdgeColor(Color.BLACK)
+                estilo.setFontScale(1.2f)
+                ib.setTextTrackStyle(estilo)
+            }
+            val info = ib.build()
             val pos = p[4] as Long
             val req = MediaLoadRequestData.Builder()
                 .setMediaInfo(info)
                 .setAutoplay(true)
                 .setCurrentTime(if (pos > 5000L) pos else 0L)
+                .apply { if (subs != null) setActiveTrackIds(longArrayOf(1L)) }
                 .build()
             c.load(req)
         }
 
-        override fun cargar(url: String, mime: String, titulo: String, directo: Boolean, posMs: Long) {
-            pendiente = arrayOf(url, mime, titulo, directo, posMs)
+        override fun cargar(url: String, mime: String, titulo: String, directo: Boolean, posMs: Long, subs: String?) {
+            pendiente = arrayOf(url, mime, titulo, directo, posMs, subs)
             ui.post {
                 try {
                     val sm = CastContext.getSharedInstance(ctx).sessionManager
-                    sm.addSessionManagerListener(escucha, CastSession::class.java)
+                    if (!escuchando) {
+                        escuchando = true
+                        sm.addSessionManagerListener(escucha, CastSession::class.java)
+                    }
                     val actual = sm.currentCastSession
                     if (actual != null && actual.isConnected) {
                         listo(actual)
