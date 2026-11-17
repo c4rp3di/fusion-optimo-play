@@ -26,6 +26,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
+import android.provider.DocumentsContract
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
@@ -49,6 +50,9 @@ class PlaybackService : Service() {
         const val A_ADELANTE = "com.optimo.play.ADELANTE"
         const val A_ATRAS = "com.optimo.play.ATRAS"
         const val A_CERRAR = "com.optimo.play.CERRAR"
+
+        /** El servicio en marcha (mismo proceso), para añadir a la cola desde el explorador sin abrir el reproductor. */
+        @Volatile var activo: PlaybackService? = null
     }
 
     inner class Enlace : Binder() {
@@ -119,6 +123,32 @@ class PlaybackService : Service() {
     private var hiloGuardado: Thread? = null
     private var genGuardado = -1
 
+    // ---- cola de reproducción local (carpeta, .m3u de un disco, varios archivos). Solo se toca desde el hilo principal.
+    @Volatile var cola: List<Pista> = emptyList()
+        private set
+    @Volatile var colaActual: Int = -1
+        private set
+    @Volatile var tituloCola: String = ""
+        private set
+    /** 0 sin repetir, 1 repetir toda la cola, 2 repetir la pista. */
+    @Volatile var repetir: Int = 0
+        private set
+    @Volatile var aleatorio: Boolean = false
+        private set
+    /** Documento (.m3u o audio) para el que hace falta que el usuario dé acceso a su carpeta; la actividad lo atiende. */
+    @Volatile var necesitaCarpeta: Uri? = null
+        private set
+    private var motivoCarpeta = 0 // 1 = lista .m3u, 2 = resto de la carpeta
+    private var entradasPendientes: List<EntradaM3u> = emptyList()
+    private var fallosSeguidos = 0
+    private val vistos = HashSet<Int>()
+    private val historial = ArrayList<Int>()
+    val hayCola: Boolean get() = cola.isNotEmpty()
+
+    /** ¿Lo que suena es solo audio? Entonces los controles no se ocultan (no hay imagen que ver). */
+    val esAudioActual: Boolean
+        get() = Utiles.esAudio(if (cola.isNotEmpty()) (cola.getOrNull(colaActual)?.nombre ?: "") else titulo)
+
     // ---- bloqueos del sistema
     private var wake: PowerManager.WakeLock? = null
     private var wifi: WifiManager.WifiLock? = null
@@ -131,7 +161,10 @@ class PlaybackService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activo = this
         ajustes = Ajustes(this)
+        repetir = ajustes.colaRepetir
+        aleatorio = ajustes.colaAleatorio
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CANAL, "Reproducción", NotificationManager.IMPORTANCE_LOW))
 
@@ -163,6 +196,7 @@ class PlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        if (activo === this) activo = null
         guardarPos()
         try { unregisterReceiver(ruidoso) } catch (e: Exception) { /* nada */ }
         hiloTorrent?.interrupt()
@@ -201,6 +235,7 @@ class PlaybackService : Service() {
         guardarPos()
         hiloTorrent?.interrupt()
         motor.cerrar()
+        limpiarCola()
         error = null
         fin = false
         estado = ""
@@ -235,6 +270,313 @@ class PlaybackService : Service() {
             abrirPosibleLista(f)
         } else {
             reproducir(f.uri, f)
+            if (ajustes.colaAuto && f.uri.startsWith("content:") && Utiles.esAudio(f.titulo)) {
+                val arbol = Carpetas.arbolDe(this, Uri.parse(f.uri))
+                if (arbol != null) construirHermanos(f, arbol, false)
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- cola de reproducción local
+
+    private fun limpiarCola() {
+        cola = emptyList()
+        colaActual = -1
+        tituloCola = ""
+        necesitaCarpeta = null
+        entradasPendientes = emptyList()
+        fallosSeguidos = 0
+        vistos.clear()
+        historial.clear()
+    }
+
+    /** Empieza a reproducir una cola de archivos locales desde la pista [indice]. */
+    fun abrirCola(pistas: List<Pista>, indice: Int, titulo: String) {
+        if (pistas.isEmpty()) return
+        guardarPos()
+        hiloTorrent?.interrupt()
+        motor.cerrar()
+        error = null
+        fin = false
+        estado = ""
+        ultimoEvento = ""
+        objetivoTorrent = null
+        canales = emptyList()
+        canalActual = -1
+        necesitaElegirCanal = false
+        guia = null
+        estadoGuia = ""
+        urlGuiaCabecera = null
+        necesitaElegir = false
+        archivosTorrent = emptyList()
+        subsExternas.clear()
+        retardoSubs = 0L
+        archivoTorrentActual = null
+        esTorrent = false
+        limpiarCola()
+        cola = ArrayList(pistas)
+        tituloCola = titulo
+        primerPlano()
+        ponerPista(indice.coerceIn(0, pistas.size - 1))
+    }
+
+    /** Pone a sonar la pista [i] de la cola (con un reproductor nuevo, como al cambiar de canal). */
+    private fun ponerPista(i: Int) {
+        val p = cola.getOrNull(i) ?: return
+        colaActual = i
+        val f = Fuente(p.uri, p.titulo)
+        fuente = f
+        titulo = p.titulo
+        claveRep = "" // sin posición que recordar por pista
+        posReanudar = 0L
+        error = null
+        fin = false
+        estado = ""
+        ultimoEvento = ""
+        subsExternas.clear()
+        retardoSubs = 0L
+        crearReproductor()
+        reproducir(p.uri, f)
+    }
+
+    /** Siguiente índice según el modo (aleatorio / repetir). -1 si la cola se acaba. [auto] = lo decide el fin de la pista. */
+    private fun indiceSiguiente(auto: Boolean): Int {
+        val n = cola.size
+        if (n == 0) return -1
+        if (auto && repetir == 2) return colaActual
+        if (aleatorio && n > 1) {
+            vistos.add(colaActual)
+            var libres = (0 until n).filter { it !in vistos }
+            if (libres.isEmpty()) {
+                if (auto && repetir != 1) return -1
+                vistos.clear()
+                vistos.add(colaActual)
+                libres = (0 until n).filter { it != colaActual }
+            }
+            return libres[(Math.random() * libres.size).toInt().coerceAtMost(libres.size - 1)]
+        }
+        val s = colaActual + 1
+        return if (s < n) s else if (repetir == 1 || !auto) 0 else -1
+    }
+
+    private fun avanzarCola(auto: Boolean): Boolean {
+        val d = indiceSiguiente(auto)
+        if (d < 0) return false
+        if (d != colaActual) {
+            historial.add(colaActual)
+            if (historial.size > 300) historial.removeAt(0)
+        }
+        ponerPista(d)
+        return true
+    }
+
+    private fun anteriorCola() {
+        val m = mp
+        val t = try { m?.time ?: 0L } catch (e: Throwable) { 0L }
+        if (t > 5000L) {
+            m?.setTime(0L)
+            return
+        }
+        if (aleatorio) {
+            if (historial.isNotEmpty()) {
+                val d = historial.removeAt(historial.size - 1)
+                ponerPista(d)
+            } else {
+                m?.setTime(0L)
+            }
+            return
+        }
+        if (colaActual > 0) {
+            historial.add(colaActual)
+            ponerPista(colaActual - 1)
+        } else if (repetir == 1 && cola.size > 1) {
+            historial.add(colaActual)
+            ponerPista(cola.size - 1)
+        } else {
+            m?.setTime(0L)
+        }
+    }
+
+    /** Salta a una pista de la cola elegida en el panel. */
+    fun saltarACola(i: Int) {
+        if (i !in cola.indices) return
+        if (i != colaActual) historial.add(colaActual)
+        ponerPista(i)
+    }
+
+    /** Añade pistas al final de la cola (o justo después de la que suena). */
+    fun anadirACola(pistas: List<Pista>, aContinuacion: Boolean = false) {
+        if (pistas.isEmpty()) return
+        val l = ArrayList(cola)
+        if (aContinuacion && colaActual in l.indices) l.addAll(colaActual + 1, pistas) else l.addAll(pistas)
+        cola = l
+        vistos.clear()
+        avisoUi = if (aContinuacion) "Sonará a continuación" else "Añadido a la cola (" + pistas.size + ")"
+    }
+
+    fun quitarDeCola(i: Int) {
+        if (i !in cola.indices) return
+        val l = ArrayList(cola)
+        l.removeAt(i)
+        vistos.clear()
+        historial.clear()
+        if (l.isEmpty()) {
+            cola = emptyList()
+            colaActual = -1
+            return
+        }
+        cola = l
+        if (i < colaActual) {
+            colaActual--
+        } else if (i == colaActual) {
+            ponerPista(minOf(i, l.size - 1)) // la que sonaba se quita: pasa a la que ocupa su sitio
+        }
+    }
+
+    /** Sube (delta -1) o baja (delta +1) una pista de la cola. */
+    fun moverEnCola(i: Int, delta: Int) {
+        val j = i + delta
+        if (i !in cola.indices || j !in cola.indices) return
+        val l = ArrayList(cola)
+        val p = l.removeAt(i)
+        l.add(j, p)
+        cola = l
+        colaActual = when (colaActual) {
+            i -> j
+            j -> i
+            else -> colaActual
+        }
+        vistos.clear()
+        historial.clear()
+    }
+
+    /** Pone la pista [i] justo detrás de la que suena. */
+    fun ponerSiguiente(i: Int) {
+        if (i !in cola.indices || i == colaActual || colaActual !in cola.indices) return
+        val l = ArrayList(cola)
+        val actual = l[colaActual]
+        val p = l.removeAt(i)
+        val pos = l.indexOf(actual) + 1
+        l.add(pos, p)
+        cola = l
+        colaActual = l.indexOf(actual)
+        vistos.clear()
+        historial.clear()
+        avisoUi = "Sonará a continuación"
+    }
+
+    /** Vacía la cola; lo que suena sigue sonando. */
+    fun vaciarCola() {
+        cola = emptyList()
+        colaActual = -1
+        vistos.clear()
+        historial.clear()
+    }
+
+    fun fijarRepetir(v: Int) {
+        repetir = v.coerceIn(0, 2)
+        ajustes.colaRepetir = repetir
+    }
+
+    fun fijarAleatorio(v: Boolean) {
+        aleatorio = v
+        ajustes.colaAleatorio = v
+        vistos.clear()
+    }
+
+    /**
+     * Pone en cola el resto de archivos de la carpeta del que suena (los del mismo tipo: audios con audio, vídeos con
+     * vídeo). [explicito] = lo pidió el usuario, así que se avisa si no se pudo.
+     */
+    private fun construirHermanos(f: Fuente, arbol: Uri, explicito: Boolean) {
+        val u = Uri.parse(f.uri)
+        val audio = Utiles.esAudio(f.titulo)
+        Thread {
+            try {
+                val id = try { DocumentsContract.getDocumentId(u) } catch (e: Exception) { null }
+                val padre = Carpetas.ubicarPadre(this, arbol, u, f.titulo)
+                if (padre == null) {
+                    if (explicito) main.post { avisoUi = "No se encontró la carpeta del archivo en la que has elegido" }
+                    return@Thread
+                }
+                val hermanos = Carpetas.hijos(this, arbol, padre)
+                    .filter { !it.esCarpeta && (if (audio) Utiles.esAudio(it.nombre) else Utiles.esVideo(it.nombre)) }
+                    .sortedWith { a, b -> Utiles.comparaNatural(a.nombre, b.nombre) }
+                var idx = hermanos.indexOfFirst { it.docId == id }
+                if (idx < 0) idx = hermanos.indexOfFirst { it.nombre == f.titulo }
+                if (hermanos.size < 2 || idx < 0) {
+                    if (explicito) main.post { avisoUi = "No hay más archivos de este tipo en la carpeta" }
+                    return@Thread
+                }
+                val pistas = hermanos.map { Pista(it.uri.toString(), it.nombre) }
+                main.post {
+                    if (fuente !== f || hayCola) return@post
+                    cola = pistas
+                    colaActual = idx
+                    tituloCola = ""
+                    vistos.clear()
+                    historial.clear()
+                    avisoUi = "Cola: " + pistas.size + " archivos de la carpeta"
+                }
+            } catch (e: Exception) {
+                if (explicito) main.post { avisoUi = "No se pudo leer la carpeta: " + (e.message ?: e.javaClass.simpleName) }
+            }
+        }.start()
+    }
+
+    /** Menú ⋮ › «Poner en cola el resto de la carpeta»: usa el acceso ya concedido o pide la carpeta. */
+    fun pedirColaCarpeta() {
+        val f = fuente ?: return
+        val u = Uri.parse(f.uri)
+        if (u.scheme != "content") {
+            avisoUi = "Solo para archivos del dispositivo"
+            return
+        }
+        val arbol = Carpetas.arbolDe(this, u)
+        if (arbol != null) {
+            construirHermanos(f, arbol, true)
+        } else {
+            motivoCarpeta = 2
+            entradasPendientes = emptyList()
+            necesitaCarpeta = u
+        }
+    }
+
+    /** La actividad consiguió que el usuario eligiera una carpeta (ya con el permiso conservado). */
+    fun carpetaConcedida(arbol: Uri) {
+        val doc = necesitaCarpeta ?: return
+        necesitaCarpeta = null
+        val f = fuente ?: return
+        val motivo = motivoCarpeta
+        val entradas = entradasPendientes
+        if (motivo == 2) {
+            construirHermanos(f, arbol, true)
+            return
+        }
+        estado = "Buscando los archivos de la lista…"
+        Thread {
+            val nombre = Utiles.nombreDe(this, doc.toString())
+            val padre = try { Carpetas.ubicarPadre(this, arbol, doc, nombre) } catch (e: Exception) { null }
+            if (padre == null) {
+                main.post {
+                    if (fuente === f) {
+                        estado = ""
+                        error = "La carpeta elegida no contiene la lista «$nombre». Elige la carpeta donde está."
+                    }
+                }
+            } else {
+                resolverLista(f, arbol, padre, entradas)
+            }
+        }.start()
+    }
+
+    fun carpetaRechazada() {
+        if (necesitaCarpeta == null) return
+        val motivo = motivoCarpeta
+        necesitaCarpeta = null
+        if (motivo == 1) {
+            estado = ""
+            error = "Sin acceso a la carpeta no se pueden reproducir los archivos de la lista"
         }
     }
 
@@ -242,6 +584,7 @@ class PlaybackService : Service() {
 
     private fun puedeSerLista(uri: String): Boolean {
         val u = uri.lowercase()
+        if (u.startsWith(Biblioteca.PREFIJO)) return true
         if (u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file:")) {
             val r = u.substringBefore('?').substringBefore('#')
             return r.endsWith(".m3u") || r.endsWith(".m3u8")
@@ -263,15 +606,23 @@ class PlaybackService : Service() {
         estado = "Leyendo…"
         Thread {
             var lista: ListaM3u? = null
+            var local: String? = null
             try {
                 val txt = ListaM3u.leer(this, f)
-                if (txt != null && ListaM3u.esLista(txt)) lista = ListaM3u.parsear(txt)
+                if (txt != null) {
+                    if (ListaM3u.esLocal(txt)) local = txt else if (ListaM3u.esLista(txt)) lista = ListaM3u.parsear(txt)
+                }
             } catch (e: Exception) {
                 // Si no se puede leer aquí, se intenta con libVLC igualmente.
             }
             main.post {
                 if (fuente !== f) return@post // se abrió otra cosa mientras tanto
                 estado = ""
+                val loc = local
+                if (loc != null) {
+                    abrirListaLocal(f, loc)
+                    return@post
+                }
                 val l = lista
                 if (l != null && l.canales.isNotEmpty()) {
                     canales = l.canales
@@ -285,6 +636,98 @@ class PlaybackService : Service() {
                 }
             }
         }.start()
+    }
+
+    /**
+     * Lista .m3u de archivos (típico de un disco): sus entradas son rutas, normalmente relativas a la carpeta donde está
+     * la lista. Se buscan junto a ella; si la app aún no tiene acceso a esa carpeta, se le pide al usuario una vez.
+     */
+    private fun abrirListaLocal(f: Fuente, txt: String) {
+        val entradas = ListaM3u.entradas(txt)
+        estado = "Buscando los archivos de la lista…"
+        Thread {
+            try {
+                val u = Uri.parse(f.uri)
+                when (u.scheme) {
+                    "http", "https" -> {
+                        val base = java.net.URL(f.uri)
+                        val pistas = entradas.mapNotNull { e ->
+                            try {
+                                val url = java.net.URL(base, e.ruta).toString()
+                                val nombre = Uri.decode(url.substringBefore('?').substringAfterLast('/'))
+                                Pista(url, nombre, e.titulo ?: Utiles.sinExtension(nombre))
+                            } catch (x: Exception) {
+                                null
+                            }
+                        }
+                        main.post { colaDeLista(f, pistas, entradas.size) }
+                    }
+                    "file" -> {
+                        val dir = File(u.path ?: "").parentFile
+                        val pistas = entradas.mapNotNull { e ->
+                            val r = File(dir, e.ruta.replace('\\', '/'))
+                            if (r.isFile) Pista(Uri.fromFile(r).toString(), r.name, e.titulo ?: Utiles.sinExtension(r.name)) else null
+                        }
+                        main.post { colaDeLista(f, pistas, entradas.size) }
+                    }
+                    "content" -> {
+                        val arbol = Carpetas.arbolDe(this, u)
+                        val padre = if (arbol != null) Carpetas.ubicarPadre(this, arbol, u, Utiles.nombreDe(this, f.uri)) else null
+                        if (arbol != null && padre != null) {
+                            resolverLista(f, arbol, padre, entradas)
+                        } else {
+                            main.post {
+                                if (fuente === f) {
+                                    entradasPendientes = entradas
+                                    motivoCarpeta = 1
+                                    necesitaCarpeta = u
+                                    estado = "Hace falta acceso a la carpeta de la lista"
+                                }
+                            }
+                        }
+                    }
+                    else -> main.post {
+                        if (fuente === f) {
+                            estado = ""
+                            error = "Esta lista usa rutas de archivos locales: ábrela desde su carpeta"
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                main.post {
+                    if (fuente === f) {
+                        estado = ""
+                        error = "No se pudo leer la lista: " + (e.message ?: e.javaClass.simpleName)
+                    }
+                }
+            }
+        }.start()
+    }
+
+    /** Busca cada entrada junto a la lista (hilo de fondo) y arranca la cola con las que encuentra. */
+    private fun resolverLista(f: Fuente, arbol: Uri, padreId: String, entradas: List<EntradaM3u>) {
+        val cache = HashMap<String, List<EntradaDoc>>()
+        val pistas = ArrayList<Pista>()
+        for (e in entradas) {
+            val d = Carpetas.resolver(this, arbol, padreId, e.ruta, cache) ?: continue
+            pistas.add(Pista(d.uri.toString(), d.nombre, e.titulo?.takeIf { it.isNotBlank() } ?: Utiles.sinExtension(d.nombre)))
+        }
+        main.post { colaDeLista(f, pistas, entradas.size) }
+    }
+
+    private fun colaDeLista(f: Fuente, pistas: List<Pista>, total: Int) {
+        if (fuente !== f) return
+        estado = ""
+        if (pistas.isEmpty()) {
+            error = "No se encontraron en la carpeta los archivos de la lista (" + total + " entradas)"
+            return
+        }
+        val nuevo = ArrayList(pistas)
+        limpiarCola()
+        cola = nuevo
+        tituloCola = f.titulo
+        ponerPista(0)
+        if (pistas.size < total) avisoUi = (total - pistas.size).toString() + " de " + total + " archivos de la lista no se encontraron"
     }
 
     /** Pone el canal número [i] de la lista (índice dentro de [canales]). */
@@ -458,6 +901,7 @@ class PlaybackService : Service() {
                 if (!f.uri.startsWith("magnet:", true)) archivoT = copiarTorrent(f.uri)
                 val lista = motor.abrir(f.uri, archivoT) { s -> estado = s }
                 archivosTorrent = lista
+                marcarYaGuardados(lista)
                 val rep = listaReproducible()
                 when {
                     rep.size == 1 -> prepararArchivo(rep[0])
@@ -560,9 +1004,16 @@ class PlaybackService : Service() {
                         actualizarSesion()
                     }
                     MediaPlayer.Event.EndReached -> {
-                        ajustes.guardarPosicion(claveRep, 0L)
+                        if (claveRep.isNotEmpty()) ajustes.guardarPosicion(claveRep, 0L)
                         val sig = if (esTorrent) siguienteEnLista() else null
-                        if (sig != null) {
+                        if (hayCola) {
+                            if (!avanzarCola(true)) {
+                                fin = true
+                                liberarBloqueos()
+                                actualizarSesion()
+                                notificar()
+                            }
+                        } else if (sig != null) {
                             // Pasa solo al siguiente archivo del torrent (capítulo, pista…).
                             avisoUi = "Siguiente: " + sig.nombre
                             elegirArchivoTorrent(sig.indice)
@@ -574,8 +1025,15 @@ class PlaybackService : Service() {
                         }
                     }
                     MediaPlayer.Event.EncounteredError -> {
-                        error = "No se puede reproducir este contenido"
-                        liberarBloqueos()
+                        if (hayCola && cola.size > 1 && fallosSeguidos < cola.size - 1) {
+                            // Una pista rota no para la cola: se salta a la siguiente.
+                            fallosSeguidos++
+                            val rota = cola.getOrNull(colaActual)?.titulo ?: ""
+                            if (avanzarCola(true)) avisoUi = "No se pudo reproducir «" + rota + "»; sigo con la siguiente"
+                        } else {
+                            error = "No se puede reproducir este contenido"
+                            liberarBloqueos()
+                        }
                     }
                     MediaPlayer.Event.Buffering -> buffering = buf
                 }
@@ -599,6 +1057,7 @@ class PlaybackService : Service() {
         estado = ""
         error = null
         fin = false
+        fallosSeguidos = 0
         pausadoPorFoco = false
         pedirFoco()
         tomarBloqueos()
@@ -702,7 +1161,7 @@ class PlaybackService : Service() {
         return memoLista
     }
 
-    val hayLista: Boolean get() = canales.size > 1 || (esTorrent && listaReproducible().size > 1)
+    val hayLista: Boolean get() = canales.size > 1 || cola.size > 1 || (esTorrent && listaReproducible().size > 1)
 
     private fun posicionEnLista(l: List<ArchivoTorrent>): Int {
         val c = objetivoTorrent ?: archivoTorrentActual ?: return -1
@@ -715,9 +1174,10 @@ class PlaybackService : Service() {
         return if (i >= 0 && i < l.size - 1) l[i + 1] else null
     }
 
-    fun haySiguiente(): Boolean = canales.size > 1 || (esTorrent && siguienteEnLista() != null)
+    fun haySiguiente(): Boolean = canales.size > 1 || cola.size > 1 || (esTorrent && siguienteEnLista() != null)
 
     fun siguiente(): Boolean {
+        if (cola.size > 1) return avanzarCola(false)
         val n = canales.size
         if (n > 1) {
             elegirCanal((maxOf(canalActual, -1) + 1) % n)
@@ -730,6 +1190,10 @@ class PlaybackService : Service() {
 
     /** Si ya llevas más de 5 s vuelve al principio del archivo; si no, va al anterior. */
     fun anterior() {
+        if (cola.size > 1) {
+            anteriorCola()
+            return
+        }
         val n = canales.size
         if (n > 1) {
             elegirCanal(if (canalActual <= 0) n - 1 else canalActual - 1)
@@ -756,11 +1220,38 @@ class PlaybackService : Service() {
     /** Espacio libre donde se descarga (la caché de la app). */
     fun espacioLibre(): Long = cacheDir.usableSpace
 
-    /** Marca o desmarca archivos para conservarlos. */
+    /** Los archivos que ya están en Descargas/OptimoPlay (misma ruta y tamaño) se marcan como guardados: no se vuelven a bajar. */
+    private fun marcarYaGuardados(lista: List<ArchivoTorrent>) {
+        for (a in lista) {
+            if (a.tam > 0 && Exportar.yaGuardado(this, a.ruta, a.tam)) motor.guardado[a.indice] = 2
+        }
+    }
+
+    /** Marca o desmarca archivos para conservarlos. Los que ya estaban guardados se omiten. */
     fun guardarArchivos(lista: List<ArchivoTorrent>, si: Boolean) {
-        for (a in lista) motor.marcarGuardar(a, si)
-        if (si && motor.pendientesGuardar() > 0) arrancarGuardado()
-        notificar()
+        if (!si) {
+            for (a in lista) motor.marcarGuardar(a, false)
+            notificar()
+            return
+        }
+        Thread {
+            var omitidos = 0
+            for (a in lista) {
+                if (motor.guardado[a.indice] == 2) {
+                    omitidos++
+                } else if (a.tam > 0 && Exportar.yaGuardado(this, a.ruta, a.tam)) {
+                    motor.guardado[a.indice] = 2
+                    omitidos++
+                } else {
+                    motor.marcarGuardar(a, true)
+                }
+            }
+            main.post {
+                if (omitidos > 0) avisoUi = "Ya estaban guardados (se omiten): " + omitidos
+                if (motor.pendientesGuardar() > 0) arrancarGuardado()
+                notificar()
+            }
+        }.start()
     }
 
     /** «2 archivos · 37 %» para la notificación. */
