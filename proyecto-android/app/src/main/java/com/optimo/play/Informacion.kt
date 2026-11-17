@@ -211,6 +211,66 @@ object Informacion {
      * el servidor en cada paso. Sirve para saber si un canal que se queda en «Cargando 0 %» es culpa del servidor
      * (rechaza segmentos, lista vacía…) o del reproductor.
      */
+    /** Lista las pistas de subtítulos que declara el manifiesto y mira si la primera se puede descargar y es WebVTT. */
+    private fun sondearSubs(lineas: List<String>, base: String, f: Fuente?, sb: StringBuilder) {
+        val entradas = lineas.filter {
+            it.startsWith("#EXT-X-MEDIA") && (it.contains("TYPE=SUBTITLES") || it.contains("TYPE=CLOSED-CAPTIONS"))
+        }
+        if (entradas.isEmpty()) {
+            sb.append("  Subtítulos: el manifiesto no declara ninguno.\n")
+            return
+        }
+        sb.append("  Subtítulos declarados (").append(entradas.size).append("):\n")
+        var primera: String? = null
+        for (l in entradas) {
+            val tipo = if (l.contains("TYPE=CLOSED-CAPTIONS")) "CC incrustados en el vídeo" else "pista aparte"
+            val idi = Regex("LANGUAGE=\"([^\"]*)\"").find(l)?.groupValues?.get(1) ?: "?"
+            val nom = Regex("NAME=\"([^\"]*)\"").find(l)?.groupValues?.get(1) ?: "?"
+            val marcas = listOf("DEFAULT=YES", "AUTOSELECT=YES", "FORCED=YES").filter { l.contains(it) }.joinToString(" ")
+            val uri = Regex("URI=\"([^\"]*)\"").find(l)?.groupValues?.get(1)
+            sb.append("    · ").append(nom).append(" [").append(idi).append("] ").append(tipo)
+            if (marcas.isNotEmpty()) sb.append(" · ").append(marcas)
+            sb.append('\n')
+            if (primera == null && uri != null) primera = uri
+        }
+        val p = primera ?: return
+        try {
+            val urlLista = URL(URL(base), p).toString()
+            val r = pedir(urlLista, f, 200_000)
+            sb.append("  Lista de la 1ª pista de subtítulos: ").append(r.codigo).append(' ').append(r.tipo).append('\n')
+            if (r.codigo >= 400) {
+                sb.append("  → El servidor rechaza esa lista: elegir esa pista puede dejar el canal esperando.\n")
+                return
+            }
+            val ls = String(r.cuerpo, Charsets.UTF_8).lines().map { it.trim() }.filter { it.isNotEmpty() }
+            val segs = ls.filter { !it.startsWith("#") }
+            sb.append("  Segmentos de subtítulos: ").append(segs.size)
+            sb.append(if (ls.any { it.startsWith("#EXT-X-ENDLIST") }) " (completa)" else " (directo)").append('\n')
+            if (ls.any { it.startsWith("#EXT-X-MAP") }) sb.append("  Usa EXT-X-MAP (subtítulos en MP4/TTML): libVLC 3 no los lee bien.\n")
+            val s0 = segs.firstOrNull()
+            if (s0 == null) {
+                sb.append("  → La lista no trae segmentos.\n")
+                return
+            }
+            val su = URL(URL(urlLista), s0).toString()
+            sb.append("  1er segmento: ").append(recortar(su, 160)).append('\n')
+            val sg = pedir(su, f, 4096)
+            val texto = String(sg.cuerpo, Charsets.UTF_8)
+            val cab = texto.lines().firstOrNull { it.isNotBlank() }?.trim() ?: ""
+            sb.append("  Respuesta: ").append(sg.codigo).append(' ').append(sg.tipo)
+                .append(", empieza por «").append(recortar(cab, 40)).append("»\n")
+            if (sg.codigo >= 400) {
+                sb.append("  → El servidor rechaza los segmentos de subtítulos.\n")
+            } else if (!cab.startsWith("WEBVTT")) {
+                sb.append("  → No es WebVTT: libVLC puede no entenderlo.\n")
+            } else if (texto.contains("X-TIMESTAMP-MAP")) {
+                sb.append("  Trae X-TIMESTAMP-MAP: si sus tiempos no casan con el vídeo, libVLC se queda esperando.\n")
+            }
+        } catch (e: Exception) {
+            sb.append("  Error sondeando subtítulos: ").append(e.javaClass.simpleName).append(": ").append(e.message ?: "").append('\n')
+        }
+    }
+
     private fun sondearHls(url: String, f: Fuente?, sb: StringBuilder) {
         sb.append("\nSondeo del flujo HLS:\n")
         try {
@@ -218,6 +278,7 @@ object Informacion {
             val txt = String(m.cuerpo, Charsets.UTF_8)
             val lineas = txt.lines().map { it.trim() }.filter { it.isNotEmpty() }
             sb.append("  Manifiesto: ").append(m.codigo).append(", ").append(lineas.size).append(" líneas\n")
+            sondearSubs(lineas, m.urlFinal, f, sb)
             var objetivo = m.urlFinal
             var media = lineas
             if (txt.contains("#EXT-X-STREAM-INF")) {
