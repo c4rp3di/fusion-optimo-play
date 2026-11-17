@@ -25,7 +25,8 @@ class EstadoRemoto(
  */
 interface Emisor {
     val nombre: String
-    fun cargar(url: String, mime: String, titulo: String, directo: Boolean, posMs: Long)
+    /** [subs]: dirección de los subtítulos (WebVTT para Chromecast, SRT para DLNA) o null. Se puede volver a llamar para cambiar de contenido. */
+    fun cargar(url: String, mime: String, titulo: String, directo: Boolean, posMs: Long, subs: String?)
     fun reproducir()
     fun pausar()
     fun buscar(ms: Long)
