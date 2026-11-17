@@ -1070,9 +1070,40 @@ class PlaybackService : Service() {
             }
             if (retardoSubs != 0L) m.setSpuDelay(retardoSubs)
             programarSubsAuto()
+            programarAudioPreferido()
         }
         actualizarSesion()
         notificar()
+    }
+
+    // ---------------------------------------------------------------- pista de audio preferida
+
+    @Volatile private var audioManual = false
+
+    /** El usuario eligió una pista a mano: la preferencia automática ya no la cambia. */
+    fun elegirAudio(id: Int) {
+        audioManual = true
+        mp?.setAudioTrack(id)
+    }
+
+    private fun programarAudioPreferido() {
+        audioManual = false
+        if (ajustes.audioPreferido.isEmpty()) return
+        // Las pistas de un directo (HLS) aparecen con retraso: se intenta dos veces.
+        main.postDelayed({ aplicarAudioPreferido() }, 1500L)
+        main.postDelayed({ aplicarAudioPreferido() }, 5000L)
+    }
+
+    /** Pone la pista que pide el ajuste «Audio preferido», si existe. */
+    fun aplicarAudioPreferido(forzar: Boolean = false) {
+        val m = mp ?: return
+        val pref = ajustes.audioPreferido
+        if (pref.isEmpty() || (audioManual && !forzar)) return
+        val pistas = m.audioTracks ?: return
+        val reales = pistas.filter { it.id >= 0 }
+        if (reales.isEmpty()) return
+        val elegida = if (pref == "primera") reales[0] else reales.firstOrNull { Utiles.coincideIdioma(it.name, pref) }
+        if (elegida != null && elegida.id != m.audioTrack) m.setAudioTrack(elegida.id)
     }
 
     // ---------------------------------------------------------------- controles
