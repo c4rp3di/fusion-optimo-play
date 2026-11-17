@@ -190,6 +190,93 @@ object Informacion {
     }
 
     /** Pide el primer byte de la URL (sin cookies) para saber qué responde el servidor. */
+    private class Resp(val codigo: Int, val tipo: String, val urlFinal: String, val cuerpo: ByteArray)
+
+    private fun pedir(url: String, f: Fuente?, max: Int): Resp {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 8000
+        c.readTimeout = 8000
+        c.setRequestProperty("User-Agent", if (f?.ua.isNullOrBlank()) Utiles.UA_MOVIL else f?.ua ?: "")
+        if (!f?.referer.isNullOrBlank()) c.setRequestProperty("Referer", f?.referer ?: "")
+        val codigo = c.responseCode
+        val flujo = if (codigo >= 400) c.errorStream else c.inputStream
+        val datos = if (flujo != null) flujo.use { Red.leerBytes(it, max) } else ByteArray(0)
+        val r = Resp(codigo, c.contentType ?: "", c.url.toString(), datos)
+        try { c.disconnect() } catch (e: Throwable) { /* nada */ }
+        return r
+    }
+
+    /**
+     * Si la URL es HLS: baja el manifiesto, la lista de la primera variante y el primer segmento, y dice qué responde
+     * el servidor en cada paso. Sirve para saber si un canal que se queda en «Cargando 0 %» es culpa del servidor
+     * (rechaza segmentos, lista vacía…) o del reproductor.
+     */
+    private fun sondearHls(url: String, f: Fuente?, sb: StringBuilder) {
+        sb.append("\nSondeo del flujo HLS:\n")
+        try {
+            val m = pedir(url, f, 300_000)
+            val txt = String(m.cuerpo, Charsets.UTF_8)
+            val lineas = txt.lines().map { it.trim() }.filter { it.isNotEmpty() }
+            sb.append("  Manifiesto: ").append(m.codigo).append(", ").append(lineas.size).append(" líneas\n")
+            var objetivo = m.urlFinal
+            var media = lineas
+            if (txt.contains("#EXT-X-STREAM-INF")) {
+                val variantes = ArrayList<String>()
+                var primera: String? = null
+                for ((i, l) in lineas.withIndex()) {
+                    if (l.startsWith("#EXT-X-STREAM-INF")) {
+                        val res = Regex("RESOLUTION=([0-9x]+)").find(l)?.groupValues?.get(1) ?: "?"
+                        val bw = Regex("BANDWIDTH=(\\d+)").find(l)?.groupValues?.get(1)?.toLongOrNull()
+                        variantes.add(res + (if (bw != null) " · " + (bw / 1000) + " kbps" else ""))
+                        if (primera == null && i + 1 < lineas.size) primera = lineas[i + 1]
+                    }
+                }
+                sb.append("  Variantes (").append(variantes.size).append("): ").append(variantes.joinToString("; ")).append('\n')
+                val p = primera
+                if (p == null) {
+                    sb.append("  Sin dirección de variante.\n")
+                    return
+                }
+                val urlVariante = URL(URL(m.urlFinal), p).toString()
+                val mv = pedir(urlVariante, f, 300_000)
+                sb.append("  Lista de la 1ª variante: ").append(mv.codigo).append(' ').append(mv.tipo).append('\n')
+                if (mv.codigo >= 400) {
+                    sb.append("  → El servidor rechaza la lista de la variante.\n")
+                    return
+                }
+                media = String(mv.cuerpo, Charsets.UTF_8).lines().map { it.trim() }.filter { it.isNotEmpty() }
+                objetivo = mv.urlFinal
+            }
+            val segs = media.filter { !it.startsWith("#") }
+            sb.append("  Segmentos en la lista: ").append(segs.size)
+            sb.append(if (media.any { it.startsWith("#EXT-X-ENDLIST") }) " (con final: vídeo completo)" else " (directo)").append('\n')
+            val marcas = ArrayList<String>()
+            if (media.any { it.startsWith("#EXT-X-DISCONTINUITY") }) marcas.add("discontinuidades")
+            if (media.any { it.startsWith("#EXT-X-CUE") || it.startsWith("#EXT-OATCLS") || it.startsWith("#EXT-X-DATERANGE") }) {
+                marcas.add("marcas de publicidad")
+            }
+            if (media.any { it.startsWith("#EXT-X-KEY") && !it.contains("METHOD=NONE") }) marcas.add("cifrado (EXT-X-KEY)")
+            if (marcas.isNotEmpty()) sb.append("  Contiene: ").append(marcas.joinToString(", ")).append('\n')
+            val s0 = segs.firstOrNull()
+            if (s0 == null) {
+                sb.append("  → La lista no trae ningún segmento: no hay nada que reproducir todavía.\n")
+                return
+            }
+            val su = URL(URL(objetivo), s0).toString()
+            sb.append("  1er segmento: ").append(recortar(su, 160)).append('\n')
+            val sg = pedir(su, f, 65536)
+            sb.append("  Respuesta del segmento: ").append(sg.codigo).append(' ').append(sg.tipo).append(", ")
+                .append(sg.cuerpo.size).append(" bytes leídos\n")
+            if (sg.codigo >= 400) {
+                sb.append("  → El servidor rechaza los segmentos: por eso libVLC no llena el búfer.\n")
+            } else {
+                sb.append("  → Los segmentos se descargan bien desde aquí.\n")
+            }
+        } catch (e: Exception) {
+            sb.append("  Error: ").append(e.javaClass.simpleName).append(": ").append(e.message ?: "").append('\n')
+        }
+    }
+
     private fun sondear(url: String, f: Fuente?): String {
         val sb = StringBuilder("Sondeo HTTP (sin cookies):\n")
         try {
@@ -216,6 +303,9 @@ object Informacion {
                 sb.append("  → El servidor rechaza la petición (puede exigir cookies o una sesión).\n")
             } else if (t.startsWith("text/html")) {
                 sb.append("  → Devuelve una página web, no un vídeo: libVLC no puede reproducir esta URL.\n")
+            }
+            if (codigo < 400 && (t.contains("mpegurl") || url.substringBefore('?').lowercase().endsWith(".m3u8"))) {
+                sondearHls(url, f, sb)
             }
         } catch (e: Exception) {
             sb.append("  Error: ").append(e.javaClass.simpleName).append(": ").append(e.message ?: "").append('\n')
