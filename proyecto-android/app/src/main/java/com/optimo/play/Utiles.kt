@@ -46,6 +46,23 @@ object Utiles {
         }
     }
 
+    /** ¿El nombre de una pista de audio de libVLC («Track 2 - [Español]») corresponde a este idioma (en, es, fr…)? */
+    fun coincideIdioma(nombre: String, clave: String): Boolean {
+        val n = nombre.lowercase()
+        val fichas: List<String> = when (clave) {
+            "en" -> listOf("english", "inglés", "ingles", "[eng]", "[en]")
+            "es" -> listOf("español", "espanol", "spanish", "castellano", "[spa]", "[es]")
+            "fr" -> listOf("français", "francais", "french", "francés", "frances", "[fre]", "[fra]", "[fr]")
+            "de" -> listOf("deutsch", "german", "alemán", "aleman", "[ger]", "[deu]", "[de]")
+            "it" -> listOf("italiano", "italian", "[ita]", "[it]")
+            "pt" -> listOf("português", "portugues", "portuguese", "portugués", "[por]", "[pt]")
+            "ja" -> listOf("japanese", "japonés", "japones", "日本語", "[jpn]", "[ja]")
+            "ko" -> listOf("korean", "coreano", "한국어", "[kor]", "[ko]")
+            else -> emptyList()
+        }
+        return fichas.any { n.contains(it) }
+    }
+
     /** Hora local «HH:mm». */
     fun hora(ms: Long): String = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(ms))
 
