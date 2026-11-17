@@ -7,6 +7,9 @@ import android.text.InputType
 import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.content.Intent
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -23,6 +26,9 @@ class AjustesActivity : Activity() {
     private lateinit var etIdioma: EditText
     private lateinit var cAuto: CheckBox
     private lateinit var cSegundoPlano: CheckBox
+    private lateinit var cColaAuto: CheckBox
+    private lateinit var cGestor: CheckBox
+    private lateinit var grupoOrient: RadioGroup
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
@@ -68,6 +74,40 @@ class AjustesActivity : Activity() {
         nota1.textSize = 12f
         nota1.alpha = 0.7f
         col.addView(nota1)
+
+        titulo("Orientación del reproductor")
+        grupoOrient = RadioGroup(this)
+        val nombresOr = listOf("Automática (sigue el bloqueo de rotación del sistema)", "Siempre horizontal", "Siempre vertical")
+        for ((i, n) in nombresOr.withIndex()) {
+            val rb = RadioButton(this)
+            rb.id = View.generateViewId()
+            rb.text = n
+            rb.isChecked = i == aj.orientacion
+            grupoOrient.addView(rb)
+        }
+        col.addView(grupoOrient)
+
+        titulo("Archivos del dispositivo")
+        cGestor = CheckBox(this)
+        cGestor.text = "Elegir archivos y carpetas con mi gestor de archivos (com.carpe.gestorarchivos)"
+        cGestor.isChecked = aj.usarGestor
+        col.addView(cGestor)
+        val notaG = TextView(this)
+        notaG.text = if (Gestor.instalado(this)) "Gestor instalado. También aparece en el selector del sistema."
+        else "El gestor no está instalado: se usa el selector del sistema."
+        notaG.textSize = 12f
+        notaG.alpha = 0.7f
+        col.addView(notaG)
+
+        titulo("Música y carpetas")
+        cColaAuto = CheckBox(this)
+        cColaAuto.text = "Al abrir un audio, poner en cola el resto de audios de su carpeta (si la app tiene acceso a ella)"
+        cColaAuto.isChecked = aj.colaAuto
+        col.addView(cColaAuto)
+        val bCarpetas = Button(this)
+        bCarpetas.text = "Carpetas con acceso concedido…"
+        bCarpetas.setOnClickListener { startActivity(Intent(this, CarpetasActivity::class.java)) }
+        col.addView(bCarpetas)
 
         titulo("Subtítulos en línea (OpenSubtitles)")
         val nota2 = TextView(this)
@@ -120,6 +160,10 @@ class AjustesActivity : Activity() {
         if (idioma.isNotEmpty()) aj.subIdioma = idioma
         aj.subAuto = cAuto.isChecked
         aj.segundoPlano = cSegundoPlano.isChecked
+        aj.colaAuto = cColaAuto.isChecked
+        aj.usarGestor = cGestor.isChecked
+        val elegido = grupoOrient.indexOfChild(grupoOrient.findViewById<View>(grupoOrient.checkedRadioButtonId))
+        if (elegido >= 0) aj.orientacion = elegido
         super.onPause()
     }
 }
