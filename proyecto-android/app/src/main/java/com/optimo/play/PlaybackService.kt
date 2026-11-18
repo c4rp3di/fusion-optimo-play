@@ -907,6 +907,7 @@ class PlaybackService : Service() {
         }
         if (uri.scheme == "http" || uri.scheme == "https") {
             media.addOption(":network-caching=2500")
+            for (o in ajustes.opcionesCalidad(false)) media.addOption(o)
             f.referer?.let { media.addOption(":http-referrer=$it") }
             f.ua?.let { media.addOption(":http-user-agent=$it") }
         }
@@ -1390,7 +1391,7 @@ class PlaybackService : Service() {
                 // Las teles DLNA antiguas no entienden HLS ni https: el móvil lo re-emite como MPEG-TS por HTTP.
                 retrans?.liberar()
                 retrans = null
-                val r = Retransmision(applicationContext, url0, f.referer, f.ua)
+                val r = Retransmision(applicationContext, url0, f.referer, f.ua, ajustes.opcionesCalidad(true))
                 val p = try { r.iniciar() } catch (t: Throwable) { -1 }
                 if (p > 0) {
                     retrans = r
