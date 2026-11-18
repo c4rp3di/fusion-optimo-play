@@ -33,6 +33,8 @@ import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.interfaces.IMedia
 import java.io.File
 import java.io.RandomAccessFile
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
  * Dueño del reproductor. Vive como servicio en primer plano (tipo mediaPlayback) para que el audio siga sonando
@@ -1345,8 +1347,12 @@ class PlaybackService : Service() {
         // Si ya se emitía a esta misma pantalla (p. ej. llegaron subtítulos), se reutiliza la conexión.
         val previo = emisor
         val reutilizar = previo != null && lan != null && destinoEmision?.id == d.id && destinoEmision?.tipo == d.tipo
-        if (!reutilizar) volverALocal(false)
+        if (!reutilizar) {
+            volverALocal(false)
+            RegistroEmision.limpiar()
+        }
         val srv = if (reutilizar) lan!! else ServidorLan(this) { motor }
+        srv.mimeMkv = if (d.tipo == Destino.DLNA) "video/x-mkv" else "video/x-matroska"
         var url: String? = null
         var mime = "video/mp4"
         var retransmitido = false
@@ -1372,6 +1378,7 @@ class PlaybackService : Service() {
                 errorMega = msg
                 error = msg
             }, true).also { megaLan = it }
+            ml.mimeMkv = if (d.tipo == Destino.DLNA) "video/x-mkv" else "video/x-matroska"
             url = ml.urlLan(nodo, ipL)
             val t = Utiles.tipoMime(nodo.nombre)
             mime = if (t == "application/octet-stream") "video/mp4" else t
@@ -1398,6 +1405,7 @@ class PlaybackService : Service() {
                     url = "http://" + ipL + ":" + p + "/live.ts"
                     mime = "video/vnd.dlna.mpeg-tts"
                     retransmitido = true
+                    sondearRetransmision("http://127.0.0.1:" + p + "/live.ts")
                 } else {
                     r.liberar()
                 }
@@ -1450,6 +1458,47 @@ class PlaybackService : Service() {
         }
         actualizarSesion()
         notificar()
+    }
+
+    /**
+     * Se pide a sí mismo el TS de la retransmisión unos segundos después de abrirse y anota qué responde libVLC
+     * (código, Content-Type, si empieza por 0x47 como todo TS, cuántos bytes salen). Sirve para distinguir
+     * «libVLC no emite» de «emite, pero la tele no lo acepta».
+     */
+    private fun sondearRetransmision(direccion: String) {
+        Thread {
+            try {
+                Thread.sleep(6000L)
+                val c = URL(direccion).openConnection() as HttpURLConnection
+                try {
+                    c.connectTimeout = 3000
+                    c.readTimeout = 4000
+                    val cod = c.responseCode
+                    val tipo = c.contentType ?: "(sin Content-Type)"
+                    val buf = ByteArray(188 * 100)
+                    var leidos = 0
+                    var primero = -1
+                    val ent = c.inputStream
+                    val limite = System.currentTimeMillis() + 4000L
+                    while (leidos < buf.size && System.currentTimeMillis() < limite) {
+                        val r = try { ent.read(buf, leidos, buf.size - leidos) } catch (e: java.net.SocketTimeoutException) { -1 }
+                        if (r <= 0) break
+                        if (leidos == 0) primero = buf[0].toInt() and 0xFF
+                        leidos += r
+                    }
+                    RegistroEmision.anotar(
+                        "Sondeo del TS local: HTTP " + cod + " · " + tipo + " · " + leidos + " B en ≤4 s · primer byte " +
+                            (if (primero < 0) "(ninguno)" else "0x" + Integer.toHexString(primero) + (if (primero == 0x47) " (TS correcto)" else " (no es TS)"))
+                    )
+                } finally {
+                    try { c.disconnect() } catch (e: Throwable) { /* nada */ }
+                }
+            } catch (e: InterruptedException) {
+                // Cancelado.
+            } catch (e: Exception) {
+                RegistroEmision.anotar("Sondeo del TS local falló: " + (e.message ?: e.javaClass.simpleName))
+            }
+        }.also { it.isDaemon = true }.start()
     }
 
     /** Deja de emitir. Con [reanudar] el móvil sigue por donde iba la tele. */
