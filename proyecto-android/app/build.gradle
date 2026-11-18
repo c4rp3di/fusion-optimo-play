@@ -12,7 +12,7 @@ android {
         // libtorrent4j exige Android 9 (API 28) o superior.
         minSdk 28
         targetSdk 34
-        versionCode 24
+        versionCode 25
         versionName '0.7.1'
 
         // Solo los ABI de moviles reales: recorta el peso de libVLC y libtorrent4j.
