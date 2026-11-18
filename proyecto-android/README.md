@@ -276,3 +276,9 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
   Respeta la calidad de ⋮ › Calidad del vídeo («Automática» = máxima). Solo escucha en loopback. Si el canal no se puede encadenar (fMP4, cifrado),
   la conexión se cierra, el registro lo explica y hay que desactivar el modo. Solo para canales (listas M3U), no afecta a archivos ni a Mega.
 - Con el modo activo el registro se limpia al abrir cada canal.
+
+## 0.8.0 — Modo compatible automático
+
+- Si un canal HLS no empieza a reproducir en **10 s** (antes 12), se reabre solo una vez en modo compatible (HLS→TS propio en 127.0.0.1)
+  y se avisa en pantalla. Es temporal (`compatTemporal`): dura hasta cambiar de canal y no modifica el ajuste ⋮ › Modo compatible para canales.
+- Si tampoco arranca así, aparece el mensaje de error de siempre (ahora «tras 10 s»). El registro anota el cambio.
