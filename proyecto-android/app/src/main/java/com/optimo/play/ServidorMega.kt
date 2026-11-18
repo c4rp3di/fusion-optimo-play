@@ -25,7 +25,13 @@ import javax.crypto.spec.SecretKeySpec
  */
 class ServidorMega(
     private val cli: MegaCliente,
-    private val alError: (String) -> Unit
+    private val alError: (String) -> Unit,
+    /**
+     * false (por defecto): solo escucha en 127.0.0.1, para libVLC.
+     * true: escucha en la red local para una tele o un Chromecast (solo mientras se emite), con CORS y cabeceras DLNA.
+     * La ruta sigue llevando un token aleatorio.
+     */
+    private val lan: Boolean = false
 ) {
 
     private var ss: ServerSocket? = null
@@ -38,7 +44,7 @@ class ServidorMega(
     fun iniciar(): Int {
         val actual = ss
         if (actual != null) return actual.localPort
-        val s = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
+        val s = if (lan) ServerSocket(0, 16) else ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         ss = s
         activo = true
         val t = Thread {
@@ -62,6 +68,15 @@ class ServidorMega(
         return "http://127.0.0.1:${iniciar()}/$token/${n.handle}/${Uri.encode(n.nombre)}"
     }
 
+    /** Archivo que se registró con [url] (el identificador es el segundo tramo de la ruta local). */
+    fun nodo(handle: String): MegaNodo? = nodos[handle]
+
+    /** Registra el archivo y devuelve la dirección en la red local ([ip] del móvil) para la tele. Solo con lan = true. */
+    fun urlLan(n: MegaNodo, ip: String): String {
+        nodos[n.handle] = n
+        return "http://$ip:${iniciar()}/$token/${n.handle}/${Uri.encode(n.nombre)}"
+    }
+
     @Synchronized
     fun detener() {
         activo = false
@@ -72,7 +87,8 @@ class ServidorMega(
 
     private fun responder(c: Socket, codigo: Int, texto: String) {
         try {
-            val cuerpo = "HTTP/1.1 $codigo $texto\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            val cors = if (lan) "Access-Control-Allow-Origin: *\r\n" else ""
+            val cuerpo = "HTTP/1.1 $codigo $texto\r\nContent-Length: 0\r\n${cors}Connection: close\r\n\r\n"
             c.getOutputStream().write(cuerpo.toByteArray(Charsets.ISO_8859_1))
             c.getOutputStream().flush()
         } catch (e: Exception) {
@@ -88,13 +104,17 @@ class ServidorMega(
             val linea = ent.readLine() ?: return
             val partes = linea.split(" ")
             if (partes.size < 2) return
-            val metodo = partes[0]
+            val metodo = partes[0].uppercase()
             val ruta = partes[1]
             var rango: String? = null
             while (true) {
                 val l = ent.readLine() ?: break
                 if (l.isEmpty()) break
                 if (l.startsWith("range:", true)) rango = l.substring(6).trim()
+            }
+            if (lan && metodo == "OPTIONS") {
+                responder(c, 204, "No Content")
+                return
             }
             val seg = ruta.substringBefore('?').split("/").filter { it.isNotEmpty() }
             if (seg.size < 2 || seg[0] != token) {
@@ -140,6 +160,13 @@ class ServidorMega(
             cab.append("Accept-Ranges: bytes\r\n")
             cab.append("Content-Length: ").append(fin - ini + 1).append("\r\n")
             if (parcial) cab.append("Content-Range: bytes $ini-$fin/$total\r\n")
+            if (lan) {
+                // Chromecast exige CORS; las Samsung/DLNA piden estas cabeceras para permitir saltar de posición.
+                cab.append("Access-Control-Allow-Origin: *\r\n")
+                cab.append("Access-Control-Expose-Headers: Content-Range, Content-Length, Accept-Ranges\r\n")
+                cab.append("transferMode.dlna.org: Streaming\r\n")
+                cab.append("contentFeatures.dlna.org: DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\r\n")
+            }
             cab.append("Connection: close\r\n\r\n")
             if (metodo == "HEAD") {
                 sal.write(cab.toString().toByteArray(Charsets.ISO_8859_1))
