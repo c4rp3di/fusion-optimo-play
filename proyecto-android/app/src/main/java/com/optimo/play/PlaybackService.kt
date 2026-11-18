@@ -849,11 +849,14 @@ class PlaybackService : Service() {
     }
 
     private var maestro: MaestroLimpio? = null
+    private var hlsLocal: RetransmisionHls? = null
 
     private fun destruirReproductor() {
         main.removeCallbacks(vigilanteInicio)
         maestro?.detener()
         maestro = null
+        hlsLocal?.liberar()
+        hlsLocal = null
         val m = mp
         val v = libvlc
         mp = null
@@ -896,9 +899,19 @@ class PlaybackService : Service() {
             // Canal HLS: libVLC abre un manifiesto local que es el original con los trozos de subtítulos de relleno
             // neutralizados (o sin las pistas de subtítulos, si así se ha pedido). Si no hay nada que arreglar, redirige al original.
             maestro?.detener()
-            val ml = MaestroLimpio(url, f.referer, f.ua, ajustes.sinSubsCanales || sinSubsTemporal)
-            maestro = ml
-            media = Media(v, Uri.parse(ml.iniciar()))
+            hlsLocal?.liberar()
+            hlsLocal = null
+            if (ajustes.canalesCompatibles) {
+                // Modo compatible: libVLC lee un TS continuo de 127.0.0.1 en vez del HLS adaptativo.
+                RegistroEmision.limpiar()
+                val rl = RetransmisionHls(applicationContext, url, f.referer, f.ua, ajustes.calidadHls, emptyList(), true)
+                hlsLocal = rl
+                media = Media(v, Uri.parse("http://127.0.0.1:" + rl.iniciar() + "/live.ts"))
+            } else {
+                val ml = MaestroLimpio(url, f.referer, f.ua, ajustes.sinSubsCanales || sinSubsTemporal)
+                maestro = ml
+                media = Media(v, Uri.parse(ml.iniciar()))
+            }
         } else {
             media = Media(v, uri)
         }
