@@ -1010,10 +1010,10 @@ class PlaybackService : Service() {
                 val sub = datos.sub
                 estado = "Consultando Mega…"
                 val cli = MegaCliente(if (datos.carpeta) datos.handle else null)
-                val srv = ServidorMega(cli) { m ->
+                val srv = ServidorMega(cli, { m: String ->
                     errorMega = m
                     error = m
-                }
+                })
                 if (!datos.carpeta) {
                     val nodo = cli.infoArchivo(datos.handle, clave)
                     val url = srv.url(nodo)
@@ -1367,7 +1367,7 @@ class PlaybackService : Service() {
                 avisoUi = "No se pudo enviar: el móvil no está conectado a una red Wi-Fi"
                 return
             }
-            val ml = megaLan ?: ServidorMega(cli, { msg ->
+            val ml = megaLan ?: ServidorMega(cli, { msg: String ->
                 errorMega = msg
                 error = msg
             }, true).also { megaLan = it }
