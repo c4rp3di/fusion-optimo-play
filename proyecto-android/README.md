@@ -179,3 +179,28 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - Información › Sondeo HLS: baja cada trozo distinto de la pista de subtítulos y dice cuántos subtítulos trae cada uno
   (así se ve si el canal manda texto de verdad o solo trozos vacíos).
 - Los trozos `empty_sub.vtt` (Rakuten) también se sustituyen por un WebVTT vacío local, igual que los `placeholder`.
+
+## 0.7.0 — Enlaces de Mega (con o sin contraseña)
+
+- **Qué admite:** enlaces a **archivo** y a **carpeta** de Mega, en formato nuevo (`mega.nz/file/…#clave`, `mega.nz/folder/…#clave`, también con
+  `/file/ID` o `/folder/ID` detrás para abrir un archivo o subcarpeta concretos), en formato antiguo (`#!ID!clave`, `#F!ID!clave`) y los
+  **protegidos con contraseña** (`mega.nz/#P!…`). Valen los dominios `mega.nz`, `mega.io` y `mega.co.nz`, con o sin `https://`.
+- **Cómo se abre:** pegándolo en la pantalla de inicio, con «Compartir» desde otra app, o con el Intent de siempre (`ACTION_VIEW` con la URL).
+  Se reproduce **mientras se descarga** y se puede saltar de posición.
+- **Contraseña:** si el enlace es `#P!…` y no se ha dado, sale un diálogo para escribirla (y otro igual si era incorrecta). Se puede adelantar de tres
+  formas: pegando el texto con «Contraseña: xxx» (también «pass:», «password=», «clave:»), con «Compartir» de ese mismo texto, o con el extra
+  `password` del Intent. La contraseña se recuerda mientras la app siga abierta; **no se guarda en disco**.
+- **Carpetas:** se listan todos los audios y vídeos (con subcarpetas, en orden natural) y se reproducen como **cola** (☰: saltar, aleatorio, repetir…).
+  Cada archivo se pide a Mega solo cuando suena.
+- **Cómo funciona:** Mega guarda los archivos cifrados (AES-128-CTR) y la clave va en el propio enlace, así que el móvil lo descifra al vuelo. Un servidor
+  local en 127.0.0.1 (`ServidorMega.kt`, con token aleatorio) pide a Mega cada rango de bytes que reclama libVLC, lo descifra y se lo entrega.
+  Para los enlaces protegidos, la clave real sale de PBKDF2-HMAC-SHA512 (100 000 vueltas) y se verifica con un HMAC-SHA256 (`Mega.kt`).
+- **Dónde mirar si algo falla:** `Mega.kt` (enlaces, contraseña, API: `g.api.mega.co.nz`) y `ServidorMega.kt` (descarga por rangos `url/inicio-fin`).
+- **Límites:**
+  - Mega limita la transferencia de las conexiones sin cuenta: si se agota, el reproductor lo avisa («límite de transferencia») y hay que esperar o cambiar de red.
+  - Los enlaces protegidos con el algoritmo antiguo (versión 1) no están soportados; los actuales usan la versión 2.
+  - No hay cuenta de Mega: solo enlaces públicos. Carpetas muy grandes tardan en listarse.
+  - **Enviar a la tele** todavía no funciona con Mega (avisa); el móvil sirve el contenido solo para sí mismo.
+  - En «Información» la clave del enlace se oculta (el botón «Copiar» no la saca del móvil).
+  - Esto no se pudo compilar ni probar contra Mega real en el entorno donde se escribió; la criptografía (contraseña, AES-CTR por rangos, atributos)
+    se comprobó con un script aparte contra el formato documentado.
