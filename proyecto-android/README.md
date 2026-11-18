@@ -282,3 +282,11 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - Si un canal HLS no empieza a reproducir en **10 s** (antes 12), se reabre solo una vez en modo compatible (HLS→TS propio en 127.0.0.1)
   y se avisa en pantalla. Es temporal (`compatTemporal`): dura hasta cambiar de canal y no modifica el ajuste ⋮ › Modo compatible para canales.
 - Si tampoco arranca así, aparece el mensaje de error de siempre (ahora «tras 10 s»). El registro anota el cambio.
+
+## 0.8.1 — Vigilante de canales que se quedan en «Cargando 0 %»
+
+- **Fallo de 0.8.0:** libVLC emite `Playing` aunque el canal siga con el búfer a 0 % y sin avanzar (La 1 / Ottera), y `alReproducir()` marca `inicioHecho`, así que
+  `vigilanteInicio` nunca saltaba. Nuevo `vigilanteCanal`: a los 10 s de abrir un canal HLS en modo normal comprueba si el tiempo avanza (`m.time > 0`);
+  si no, activa `compatTemporal` y reabre en modo compatible. Si avanza, lo anota y no hace nada. `vigilanteInicio` se mantiene para los casos sin evento `Playing`.
+- **⋮ › Registro del canal** (siempre que se abre un canal, no solo al emitir): muestra el registro con «Copiar». En modo normal anota la apertura,
+  qué vio el vigilante (tiempo, búfer, último evento) y si reabrió en modo compatible; en modo compatible, lo de `RetransmisionHls`.
