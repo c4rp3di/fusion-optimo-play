@@ -13,7 +13,16 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 /** Un receptor DLNA (UPnP MediaRenderer) y la dirección de su servicio AVTransport. */
-class DlnaDispositivo(val nombre: String, val controlUrl: String, val servicio: String)
+class DlnaDispositivo(
+    val nombre: String,
+    val controlUrl: String,
+    val servicio: String,
+    /** Servicio ConnectionManager (dice qué formatos acepta la tele); null si no lo anuncia. */
+    val conexionUrl: String? = null,
+    val conexionTipo: String? = null,
+    /** Fabricante, modelo y número de modelo tal como los anuncia la tele. */
+    val modelo: String = ""
+)
 
 /**
  * DLNA sin librerías: búsqueda SSDP por multidifusión y control SOAP del servicio AVTransport.
@@ -91,21 +100,96 @@ object Dlna {
             val nombre = Regex("<friendlyName>(.*?)</friendlyName>", dotall).find(xml)?.groupValues?.get(1)?.trim()
             var control: String? = null
             var tipo: String? = null
+            var conUrl: String? = null
+            var conTipo: String? = null
             for (bloque in Regex("<service>(.*?)</service>", dotall).findAll(xml)) {
                 val b = bloque.groupValues[1]
+                if (b.contains("ConnectionManager") && conUrl == null) {
+                    conUrl = Regex("<controlURL>(.*?)</controlURL>", dotall).find(b)?.groupValues?.get(1)?.trim()
+                    conTipo = Regex("<serviceType>(.*?)</serviceType>", dotall).find(b)?.groupValues?.get(1)?.trim()
+                }
                 if (b.contains("AVTransport")) {
                     control = Regex("<controlURL>(.*?)</controlURL>", dotall).find(b)?.groupValues?.get(1)?.trim()
                     tipo = Regex("<serviceType>(.*?)</serviceType>", dotall).find(b)?.groupValues?.get(1)?.trim()
-                    break
                 }
             }
             if (control == null || tipo == null) return null
             val baseTxt = Regex("<URLBase>(.*?)</URLBase>", dotall).find(xml)?.groupValues?.get(1)?.trim()
             val base = URL(if (!baseTxt.isNullOrEmpty()) baseTxt else location)
-            DlnaDispositivo(desescapar(nombre ?: "Receptor DLNA"), URL(base, control).toString(), tipo)
+            fun campo(n: String) = Regex("<$n>(.*?)</$n>", dotall).find(xml)?.groupValues?.get(1)?.trim() ?: ""
+            val modelo = listOf(campo("manufacturer"), campo("modelName"), campo("modelNumber"))
+                .filter { it.isNotEmpty() }.joinToString(" · ") { desescapar(it) }
+            DlnaDispositivo(
+                desescapar(nombre ?: "Receptor DLNA"), URL(base, control).toString(), tipo,
+                if (conUrl != null && conTipo != null) URL(base, conUrl).toString() else null, conTipo, modelo
+            )
         } catch (e: Exception) {
             null
         }
+    }
+
+    // ------------------------------------------------------------------ compatibilidad de la tele
+
+    /**
+     * Pregunta a la tele qué formatos acepta (ConnectionManager › GetProtocolInfo) y devuelve un texto legible.
+     * Bloquea: llamar desde un hilo.
+     */
+    fun compatibilidad(d: DlnaDispositivo): String {
+        val sb = StringBuilder()
+        sb.append("Tele: ").append(d.nombre).append('\n')
+        if (d.modelo.isNotEmpty()) sb.append("Modelo: ").append(d.modelo).append('\n')
+        val url = d.conexionUrl
+        val tipo = d.conexionTipo
+        if (url == null || tipo == null) {
+            sb.append("\nLa tele no anuncia el servicio ConnectionManager: no se puede saber qué formatos acepta.")
+            return sb.toString()
+        }
+        try {
+            val cuerpo = "<?xml version=\"1.0\" encoding=\"utf-8\"?>" +
+                "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" " +
+                "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body>" +
+                "<u:GetProtocolInfo xmlns:u=\"" + tipo + "\"></u:GetProtocolInfo></s:Body></s:Envelope>"
+            val c = URL(url).openConnection() as HttpURLConnection
+            var txt = ""
+            try {
+                c.requestMethod = "POST"
+                c.doOutput = true
+                c.connectTimeout = 5000
+                c.readTimeout = 8000
+                c.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"")
+                c.setRequestProperty("SOAPACTION", "\"" + tipo + "#GetProtocolInfo\"")
+                c.outputStream.use { it.write(cuerpo.toByteArray(Charsets.UTF_8)) }
+                val cod = c.responseCode
+                val flujo = if (cod >= 400) c.errorStream else c.inputStream
+                txt = if (flujo != null) flujo.use { String(Red.leerBytes(it, 400_000), Charsets.UTF_8) } else ""
+                if (cod >= 400) {
+                    sb.append("\nLa tele respondió HTTP ").append(cod).append(" a GetProtocolInfo")
+                    return sb.toString()
+                }
+            } finally {
+                try { c.disconnect() } catch (e: Throwable) { /* nada */ }
+            }
+            val sink = Regex("<Sink>(.*?)</Sink>", RegexOption.DOT_MATCHES_ALL).find(txt)?.groupValues?.get(1)?.trim() ?: ""
+            val items = desescapar(sink).split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            if (items.isEmpty()) {
+                sb.append("\nLa tele no devolvió ninguna lista de formatos.")
+                return sb.toString()
+            }
+            val video = items.filter { it.contains(":video/", true) }
+            val audio = items.filter { it.contains(":audio/", true) }
+            val resto = items.filter { !it.contains(":video/", true) && !it.contains(":audio/", true) && !it.contains(":image/", true) }
+            sb.append("\nVÍDEO (").append(video.size).append("):\n")
+            for (i in video) sb.append("  ").append(i.removePrefix("http-get:*:")).append('\n')
+            sb.append("\nAUDIO (").append(audio.size).append("):\n")
+            for (i in audio) sb.append("  ").append(i.removePrefix("http-get:*:")).append('\n')
+            if (resto.isNotEmpty()) {
+                sb.append("\nOTROS (").append(resto.size).append("):\n")
+                for (i in resto) sb.append("  ").append(i.removePrefix("http-get:*:")).append('\n')
+            }
+        } catch (e: Exception) {
+            sb.append("\nNo se pudo consultar a la tele: ").append(e.message ?: e.javaClass.simpleName)
+        }
+        return sb.toString()
     }
 
     // ------------------------------------------------------------------ envío de un vídeo
