@@ -18,7 +18,9 @@ class Retransmision(
     private val referer: String?,
     private val ua: String?,
     /** Opciones de calidad HLS (`:adaptive-logic=…`), de [Ajustes.opcionesCalidad]. */
-    private val calidad: List<String> = listOf(":adaptive-logic=highest")
+    private val calidad: List<String> = listOf(":adaptive-logic=highest"),
+    /** Si es > 0, puerto en el que se sirve «/live.ts» (lo usa RetransmisionHls al pasar a libVLC). */
+    private val puertoFijo: Int = 0
 ) {
     private var vlc: LibVLC? = null
     private var mp: MediaPlayer? = null
@@ -27,7 +29,7 @@ class Retransmision(
 
     /** Arranca y devuelve el puerto en el que se sirve «/live.ts». */
     fun iniciar(): Int {
-        val puerto = ServerSocket(0).use { it.localPort }
+        val puerto = if (puertoFijo > 0) puertoFijo else ServerSocket(0).use { it.localPort }
         val v = LibVLC(ctx.applicationContext, arrayListOf("--no-drop-late-frames"))
         val m = MediaPlayer(v)
         m.setEventListener { ev ->
