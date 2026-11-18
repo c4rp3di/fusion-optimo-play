@@ -39,6 +39,13 @@ class ServidorMega(
     private val token = UUID.randomUUID().toString().replace("-", "").take(12)
     private val nodos = ConcurrentHashMap<String, MegaNodo>()
     @Volatile private var activo = false
+    /** Tipo MIME que se anuncia para los MKV: las teles DLNA (Samsung) esperan «video/x-mkv»; Chromecast, «video/x-matroska». */
+    @Volatile var mimeMkv: String = "video/x-matroska"
+
+    private fun mimeDe(nombre: String): String {
+        val t = Utiles.tipoMime(nombre)
+        return if (t == "video/x-matroska") mimeMkv else t
+    }
 
     @Synchronized
     fun iniciar(): Int {
@@ -98,6 +105,9 @@ class ServidorMega(
 
     private fun atender(c: Socket) {
         var con: HttpURLConnection? = null
+        var info = ""
+        var corte = ""
+        var cnt: Contador? = null
         try {
             c.soTimeout = 15000
             val ent = c.getInputStream().bufferedReader(Charsets.ISO_8859_1)
@@ -107,11 +117,14 @@ class ServidorMega(
             val metodo = partes[0].uppercase()
             val ruta = partes[1]
             var rango: String? = null
+            var ua = ""
             while (true) {
                 val l = ent.readLine() ?: break
                 if (l.isEmpty()) break
                 if (l.startsWith("range:", true)) rango = l.substring(6).trim()
+                if (l.startsWith("user-agent:", true)) ua = l.substring(11).trim()
             }
+            if (lan) info = "MEGA " + metodo + " " + ruta.replace(token, "…") + " · Range: " + (rango ?: "-") + " · UA: " + ua
             if (lan && metodo == "OPTIONS") {
                 responder(c, 204, "No Content")
                 return
@@ -153,10 +166,12 @@ class ServidorMega(
                 return
             }
             c.soTimeout = 0
-            val sal = BufferedOutputStream(c.getOutputStream(), 65536)
+            val contador = Contador(c.getOutputStream())
+            cnt = contador
+            val sal = BufferedOutputStream(contador, 65536)
             val cab = StringBuilder()
             cab.append(if (parcial) "HTTP/1.1 206 Partial Content\r\n" else "HTTP/1.1 200 OK\r\n")
-            cab.append("Content-Type: ").append(Utiles.tipoMime(n.nombre)).append("\r\n")
+            cab.append("Content-Type: ").append(mimeDe(n.nombre)).append("\r\n")
             cab.append("Accept-Ranges: bytes\r\n")
             cab.append("Content-Length: ").append(fin - ini + 1).append("\r\n")
             if (parcial) cab.append("Content-Range: bytes $ini-$fin/$total\r\n")
@@ -191,7 +206,11 @@ class ServidorMega(
             enviar(sal, conexion, n, ini, bloque, fin)
         } catch (e: Exception) {
             // Lo normal: libVLC cierra la conexión al saltar de posición.
+            corte = e.javaClass.simpleName + ": " + (e.message ?: "")
         } finally {
+            if (lan && info.isNotEmpty()) {
+                RegistroEmision.anotar(info + " → enviados " + (cnt?.total ?: 0L) + " B" + (if (corte.isNotEmpty()) " · cortado (" + corte + ")" else ""))
+            }
             try { con?.disconnect() } catch (e: Exception) { /* nada */ }
             try { c.close() } catch (e: Exception) { /* nada */ }
         }
