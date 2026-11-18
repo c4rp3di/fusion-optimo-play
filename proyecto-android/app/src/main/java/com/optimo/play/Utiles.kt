@@ -158,7 +158,12 @@ object Utiles {
     /** Primer magnet o enlace http(s) que aparezca en un texto compartido. */
     fun primerEnlace(texto: String?): String? {
         if (texto == null) return null
-        return Regex("(magnet:\\?\\S+|https?://\\S+)", RegexOption.IGNORE_CASE).find(texto)?.value
+        val v = Regex(
+            "(magnet:\\?\\S+|https?://\\S+|(?:www\\.)?mega\\.(?:nz|io|co\\.nz)/\\S+)",
+            RegexOption.IGNORE_CASE
+        ).find(texto)?.value ?: return null
+        // «mega.nz/file/…» sin esquema (así se suele copiar): se completa.
+        return if (v.startsWith("magnet:", true) || v.startsWith("http", true)) v else "https://$v"
     }
 
     fun esArchivoTorrent(uri: String): Boolean {
@@ -169,6 +174,7 @@ object Utiles {
     /** Nombre legible de lo que se va a reproducir. */
     fun nombreDe(ctx: Context, uri: String): String {
         try {
+            if (MegaEnlace.esMega(uri)) return "Mega" // el nombre real se conoce al consultar el enlace
             if (uri.startsWith("magnet:", true)) {
                 val m = Regex("[?&]dn=([^&]+)", RegexOption.IGNORE_CASE).find(uri)
                 if (m != null) return URLDecoder.decode(m.groupValues[1], "UTF-8")
