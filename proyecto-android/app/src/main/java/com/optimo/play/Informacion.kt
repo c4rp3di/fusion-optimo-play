@@ -78,6 +78,7 @@ object Informacion {
         val tipo = when {
             s.hayCanales -> "Lista de canales M3U (" + s.canales.size + " canales)"
             s.esTorrent -> "Torrent (se reproduce desde un servidor local)"
+            s.esMega -> "Mega (se descifra en el móvil y se sirve desde un servidor local)"
             uri.startsWith("content:", true) -> "Archivo del dispositivo"
             uri.startsWith("file:", true) -> "Archivo del dispositivo"
             esRed(uri) && PlayerUtilTipo.esManifiesto(uri) -> "Red · manifiesto HLS/DASH"
@@ -92,7 +93,9 @@ object Informacion {
             sb.append("Canal: ").append(canal.etiqueta).append(" · grupo ").append(canal.grupo).append('\n')
             sb.append("Guía: ").append(if (s.estadoGuia.isEmpty()) "(sin guía)" else s.estadoGuia).append('\n')
         }
-        sb.append("URI recibida:\n  ").append(recortar(uri, 400)).append('\n')
+        // En los enlaces de Mega la clave va tras el #: no se muestra (el botón «Copiar» la sacaría del móvil).
+        val uriVista = if (MegaEnlace.esMega(uri)) uri.substringBefore('#') + "#…(clave oculta)" else uri
+        sb.append("URI recibida:\n  ").append(recortar(uriVista, 400)).append('\n')
         val real = s.urlReproduccion
         if (real != null && real != uri) sb.append("URL usada por libVLC:\n  ").append(recortar(real, 400)).append('\n')
         if (!f?.referer.isNullOrBlank()) sb.append("Referer: ").append(recortar(f?.referer ?: "", 200)).append('\n')
