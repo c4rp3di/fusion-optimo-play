@@ -70,6 +70,29 @@ object Informacion {
         }
     }
 
+    /** Muestra el registro de lo ocurrido con el canal o la emisión actual (con «Copiar»). */
+    fun registro(act: Activity) {
+        val dp = act.resources.displayMetrics.density
+        val tv = TextView(act)
+        tv.setTypeface(Typeface.MONOSPACE)
+        tv.setTextSize(12f)
+        tv.setTextIsSelectable(true)
+        tv.setPadding((16 * dp).toInt(), (8 * dp).toInt(), (16 * dp).toInt(), (8 * dp).toInt())
+        tv.text = RegistroEmision.texto()
+        val scroll = ScrollView(act)
+        scroll.addView(tv)
+        AlertDialog.Builder(act)
+            .setTitle("Registro")
+            .setView(scroll)
+            .setPositiveButton("Copiar") { _, _ ->
+                val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("Optimo Play", tv.text.toString()))
+                Toast.makeText(act, "Copiado", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
     /** Pregunta a la tele DLNA qué formatos acepta y lo muestra (con «Copiar»). */
     fun compatibilidadTele(act: Activity, d: DlnaDispositivo) {
         val dp = act.resources.displayMetrics.density
