@@ -1395,7 +1395,7 @@ class PlaybackService : Service() {
                 if (p > 0) {
                     retrans = r
                     url = "http://" + ipL + ":" + p + "/live.ts"
-                    mime = "video/mpeg"
+                    mime = "video/vnd.dlna.mpeg-tts"
                     retransmitido = true
                 } else {
                     r.liberar()
