@@ -1521,6 +1521,9 @@ class PlayerActivity : Activity() {
         }
         etiquetas.add("Velocidad"); acciones.add { menuVelocidad() }
         etiquetas.add("Decodificación de vídeo"); acciones.add { menuDecodificacion() }
+        if (s.hayCanales || (s.urlReproduccion ?: "").contains("m3u8", true)) {
+            etiquetas.add("Calidad del vídeo (canales)"); acciones.add { menuCalidad() }
+        }
         if (s.esTorrent) {
             etiquetas.add("Estadísticas del torrent: " + (if (aj.mostrarStats) "sí" else "no"))
             acciones.add {
@@ -1592,6 +1595,23 @@ class PlayerActivity : Activity() {
         val actual = aj.decodificacion
         lista("Decodificación de vídeo", nombres.mapIndexed { i, n -> (if (i == actual) "● " else "") + n }) {
             aj.decodificacion = it
+            aviso("Aplicando…")
+            svc?.reconstruir()
+        }
+    }
+
+    /** Calidad de los directos HLS (también la que se manda a la tele). Se reabre el canal para aplicarla. */
+    private fun menuCalidad() {
+        val nombres = listOf(
+            "Automática (en la tele, equivale a máxima)",
+            "Máxima",
+            "Mínima",
+            "Hasta 720p",
+            "Hasta 480p"
+        )
+        val actual = aj.calidadHls
+        lista("Calidad del vídeo", nombres.mapIndexed { i, n -> (if (i == actual) "● " else "") + n }) {
+            aj.calidadHls = it
             aviso("Aplicando…")
             svc?.reconstruir()
         }
