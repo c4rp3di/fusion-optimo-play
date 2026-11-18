@@ -221,3 +221,9 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - **⋮ › Compatibilidad de la tele (formatos)** (aparece mientras se emite a una tele DLNA): pregunta a la tele por `ConnectionManager › GetProtocolInfo`
   y muestra modelo y lista de formatos aceptados (vídeo, audio, otros), con «Copiar». Sirve para saber qué contenedor y códec admite
   (p. ej. si una Samsung antigua acepta MKV, MP4, MPEG-TS o solo MPEG-PS) antes de decidir si hace falta recodificar.
+
+## 0.7.3 — Perfil DLNA en la retransmisión TS
+
+- Según `GetProtocolInfo` de una Samsung UE37ES5500, la tele solo anuncia MPEG-TS como `video/vnd.dlna.mpeg-tts` con perfil `AVC_TS_*`.
+  La retransmisión de canales (HLS → TS) se declaraba como `video/mpeg` sin perfil; ahora se declara con `AVC_TS_MP_HD_AAC_MULT5`.
+  Es una hipótesis sin probar en la tele; Chromecast no cambia.
