@@ -262,6 +262,9 @@ object Dlna {
                     try { accion("Stop", "<InstanceID>0</InstanceID>") } catch (e: Exception) { /* nada que parar */ }
                     // Samsung y otras exigen los «DLNA.ORG_*»; el resto los ignora.
                     val dlnaMime = if (mime == "video/x-matroska") "video/x-mkv" else mime
+                    // Retransmisión MPEG-TS (H.264 + AAC): esta tele (lista de GetProtocolInfo) solo anuncia TS con un perfil DLNA
+                    // concreto («video/vnd.dlna.mpeg-tts» + AVC_TS_*), no «video/mpeg» sin perfil.
+                    val perfil = if (mime == "video/vnd.dlna.mpeg-tts") "DLNA.ORG_PN=AVC_TS_MP_HD_AAC_MULT5;" else ""
                     val didl = "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" " +
                         "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" " +
                         "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" " +
@@ -269,7 +272,7 @@ object Dlna {
                         "<item id=\"0\" parentID=\"-1\" restricted=\"1\"><dc:title>" + escapar(titulo) + "</dc:title>" +
                         "<upnp:class>" + (if (mime.startsWith("audio")) "object.item.audioItem" else "object.item.videoItem") +
                         "</upnp:class><res protocolInfo=\"http-get:*:" + dlnaMime +
-                        ":DLNA.ORG_OP=" + (if (directo) "00" else "01") + ";DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\">" +
+                        ":" + perfil + "DLNA.ORG_OP=" + (if (directo) "00" else "01") + ";DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\">" +
                         escapar(url) + "</res>" +
                         (if (subs != null) "<res protocolInfo=\"http-get:*:text/srt:*\">" + escapar(subs) + "</res>" +
                             "<sec:CaptionInfoEx sec:type=\"srt\">" + escapar(subs) + "</sec:CaptionInfoEx>" +
