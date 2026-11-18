@@ -215,6 +215,7 @@ object Dlna {
         @Volatile private var haSonado = false
         @Volatile private var posInicial = 0L
         @Volatile private var directo = false
+        @Volatile private var ultEstado = ""
         private val ejecutor = Executors.newSingleThreadExecutor()
         private var sondeo: Thread? = null
 
@@ -236,6 +237,7 @@ object Dlna {
                 val cod = c.responseCode
                 val flujo = if (cod >= 400) c.errorStream else c.inputStream
                 val txt = if (flujo != null) flujo.use { String(Red.leerBytes(it, 200_000), Charsets.UTF_8) } else ""
+                if (nombre != "GetTransportInfo" && nombre != "GetPositionInfo") RegistroEmision.anotar("SOAP " + nombre + " → HTTP " + cod)
                 if (cod >= 400) {
                     val det = Regex("<errorDescription>(.*?)</errorDescription>", RegexOption.DOT_MATCHES_ALL)
                         .find(txt)?.groupValues?.get(1)?.trim()
@@ -278,6 +280,10 @@ object Dlna {
                             "<sec:CaptionInfoEx sec:type=\"srt\">" + escapar(subs) + "</sec:CaptionInfoEx>" +
                             "<sec:CaptionInfo sec:type=\"srt\">" + escapar(subs) + "</sec:CaptionInfo>" else "") +
                         "</item></DIDL-Lite>"
+                    RegistroEmision.anotar(
+                        "Cargar en la tele: mime=" + dlnaMime + " · perfil=" + (if (perfil.isEmpty()) "(ninguno)" else perfil.trimEnd(';')) +
+                            " · directo=" + directo + " · subtítulos=" + (subs != null) + " · " + url.replace(Regex("/[0-9a-f]{12,16}/"), "/…/")
+                    )
                     accion(
                         "SetAVTransportURI",
                         "<InstanceID>0</InstanceID><CurrentURI>" + escapar(url) + "</CurrentURI><CurrentURIMetaData>" +
@@ -302,6 +308,10 @@ object Dlna {
                         val estado = Regex("<CurrentTransportState>(.*?)</CurrentTransportState>").find(ti)?.groupValues?.get(1) ?: ""
                         val pos = leerHms(Regex("<RelTime>(.*?)</RelTime>").find(pi)?.groupValues?.get(1)) ?: est.posMs
                         val dur = leerHms(Regex("<TrackDuration>(.*?)</TrackDuration>").find(pi)?.groupValues?.get(1)) ?: 0L
+                        if (estado != ultEstado) {
+                            ultEstado = estado
+                            RegistroEmision.anotar("Estado de la tele: " + estado + " · pos " + hms(pos) + " · dur " + hms(dur))
+                        }
                         val sonando = estado == "PLAYING"
                         if (sonando) haSonado = true
                         val fin = haSonado && (estado == "STOPPED" || estado == "NO_MEDIA_PRESENT")
