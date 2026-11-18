@@ -12,7 +12,9 @@ data class Fuente(
     val uri: String,
     val titulo: String,
     val referer: String? = null,
-    val ua: String? = null
+    val ua: String? = null,
+    /** Contraseña de un enlace de Mega protegido (#P!…), si quien lo pasa ya la conoce. */
+    val clave: String? = null
 )
 
 /**
