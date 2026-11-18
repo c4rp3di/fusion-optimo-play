@@ -232,3 +232,10 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 
 - La retransmisión a teles DLNA fija la variante más alta del HLS (`:adaptive-logic=highest`). Antes libVLC podía saltar entre 480p mono y 720p estéreo
   dentro del mismo TS, algo que los decodificadores antiguos no admiten. Hipótesis a partir de la pantalla Información de un canal; sin probar en la tele.
+
+## 0.7.5 — Elegir la calidad de los canales
+
+- **⋮ › Calidad del vídeo (canales)** (canales y flujos HLS): automática, máxima, mínima, hasta 720p o hasta 480p. Se guarda y se aplica reabriendo el canal.
+  Usa las opciones del módulo adaptive de libVLC (`adaptive-logic`, `adaptive-maxheight`). Vale para el móvil y para la tele: al emitir a una tele DLNA,
+  «automática» equivale a «máxima» (una variante fija evita cambios de resolución dentro del TS). Si `adaptive-maxheight` no surte efecto en esta
+  versión de libVLC, «hasta 720p/480p» se comportará como «máxima».
