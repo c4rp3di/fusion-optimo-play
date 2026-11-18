@@ -855,6 +855,7 @@ class PlaybackService : Service() {
 
     private fun destruirReproductor() {
         main.removeCallbacks(vigilanteInicio)
+        main.removeCallbacks(vigilanteCanal)
         maestro?.detener()
         maestro = null
         hlsLocal?.liberar()
@@ -910,6 +911,8 @@ class PlaybackService : Service() {
                 hlsLocal = rl
                 media = Media(v, Uri.parse("http://127.0.0.1:" + rl.iniciar() + "/live.ts"))
             } else {
+                RegistroEmision.limpiar()
+                RegistroEmision.anotar("Canal HLS abierto en modo normal (libVLC con HLS adaptativo), calidad " + ajustes.calidadHls)
                 val ml = MaestroLimpio(url, f.referer, f.ua, ajustes.sinSubsCanales || sinSubsTemporal)
                 maestro = ml
                 media = Media(v, Uri.parse(ml.iniciar()))
@@ -934,19 +937,47 @@ class PlaybackService : Service() {
         if (emisor != null && dEmi != null) {
             // Se está emitiendo: el contenido nuevo se manda a la misma pantalla en vez de sonar en el móvil.
             main.removeCallbacks(vigilanteInicio)
+        main.removeCallbacks(vigilanteCanal)
             val p = posReanudar
             main.post { if (emisor != null) emitirA(dEmi, p) }
             return
         }
         m.play()
         main.removeCallbacks(vigilanteInicio)
+        main.removeCallbacks(vigilanteCanal)
         main.postDelayed(vigilanteInicio, 10_000L)
+        if (canales.isNotEmpty() && url.contains("m3u8", true) && (uri.scheme == "http" || uri.scheme == "https")) {
+            main.postDelayed(vigilanteCanal, 10_000L)
+        }
     }
 
     /**
      * Si libVLC no llega a reproducir en 12 s no hay evento de error (p. ej. una URL que no es un vídeo): se avisa en
      * pantalla en vez de dejar solo el título. Si luego empieza a sonar, alReproducir() quita el aviso.
      */
+    /**
+     * libVLC emite «Playing» aunque el canal siga con el búfer a 0 % y sin avanzar (HLS con anuncios insertados), así que
+     * [vigilanteInicio] no basta: a los 10 s se comprueba si el tiempo avanza de verdad y, si no, se reabre en modo compatible.
+     */
+    private val vigilanteCanal = Runnable {
+        val m = mp ?: return@Runnable
+        val f = fuenteActiva ?: return@Runnable
+        val u = ultimaUrl ?: return@Runnable
+        if (emisor != null || ajustes.canalesCompatibles || compatTemporal) return@Runnable
+        val t = try { m.time } catch (e: Throwable) { 0L }
+        val pausado = try { m.playerState == IMedia.State.Paused } catch (e: Throwable) { false }
+        if (pausado) return@Runnable
+        if (t <= 0L) {
+            RegistroEmision.anotar("A los 10 s el canal no avanza (tiempo " + t + " ms, búfer " + buffering + " %, último evento: " + ultimoEvento + "): se reabre en modo compatible")
+            compatTemporal = true
+            posReanudar = 0L
+            avisoUi = "El canal no arrancaba: se reabre en modo compatible"
+            reproducir(u, f)
+        } else {
+            RegistroEmision.anotar("A los 10 s el canal avanza (tiempo " + t + " ms)")
+        }
+    }
+
     private val vigilanteInicio = Runnable {
         if (mp != null && !inicioHecho && error == null) {
             val u = ultimaUrl ?: ""
@@ -1473,6 +1504,7 @@ class PlaybackService : Service() {
         destinoEmision = d
         enviarPausaLocal = true
         main.removeCallbacks(vigilanteInicio)
+        main.removeCallbacks(vigilanteCanal)
         try { m?.pause() } catch (t: Throwable) { /* nada */ }
         tomarBloqueos()
         if (retransmitido) {
