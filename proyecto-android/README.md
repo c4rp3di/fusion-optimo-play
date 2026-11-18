@@ -215,3 +215,9 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
   mientras emite, el reproductor local queda en pausa). La tele debe entender el códec (H.264/AAC/AC3; HEVC en teles antiguas no).
 - **Dónde mirar si algo falla:** `PlaybackService.emitirA` (rama `megaOrigen`) y `ServidorMega.kt` (`lan`, `urlLan`).
 - No compilado ni probado contra una tele real en el entorno donde se escribió.
+
+## 0.7.2 — Compatibilidad de la tele
+
+- **⋮ › Compatibilidad de la tele (formatos)** (aparece mientras se emite a una tele DLNA): pregunta a la tele por `ConnectionManager › GetProtocolInfo`
+  y muestra modelo y lista de formatos aceptados (vídeo, audio, otros), con «Copiar». Sirve para saber qué contenedor y códec admite
+  (p. ej. si una Samsung antigua acepta MKV, MP4, MPEG-TS o solo MPEG-PS) antes de decidir si hace falta recodificar.
