@@ -32,6 +32,7 @@ class RetransmisionHls(
     private val listo = CountDownLatch(1)
     @Volatile private var lista: String? = null
     @Volatile private var vlc: Retransmision? = null
+    @Volatile private var vlcPuerto = 0
 
     private class Lista(val seq: Long, val segs: List<String>, val objetivo: Int, val fin: Boolean, val problema: String?)
 
@@ -114,19 +115,72 @@ class RetransmisionHls(
         }
     }
 
-    /** Pasa al método con libVLC en el mismo puerto que ya se le dio a la tele. */
+    /**
+     * Pasa al método con libVLC: él emite el TS en un puerto aparte y este servidor (el que conoce la tele) lo canaliza
+     * con las cabeceras DLNA correctas y lo anota en el registro.
+     */
     private fun respaldoVlc() {
-        val fijo = puerto
-        try { ss?.close() } catch (e: Exception) { /* nada */ }
-        ss = null
         try {
-            val r = Retransmision(ctx, url, referer, ua, opcionesVlc, fijo)
+            val p2 = ServerSocket(0).use { it.localPort }
+            val r = Retransmision(ctx, url, referer, ua, opcionesVlc, p2)
             r.iniciar()
             vlc = r
+            vlcPuerto = p2
         } catch (t: Throwable) {
             RegistroEmision.anotar("libVLC tampoco pudo retransmitir: " + (t.message ?: t.javaClass.simpleName))
         }
         listo.countDown()
+    }
+
+    private fun cabecera(): String =
+        "HTTP/1.1 200 OK\r\n" +
+            "Content-Type: video/vnd.dlna.mpeg-tts\r\n" +
+            "Cache-Control: no-cache\r\n" +
+            "Access-Control-Allow-Origin: *\r\n" +
+            "transferMode.dlna.org: Streaming\r\n" +
+            "contentFeatures.dlna.org: DLNA.ORG_PN=AVC_TS_MP_HD_AAC_MULT5;DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\r\n" +
+            "Connection: close\r\n\r\n"
+
+    /** Copia a la tele lo que emite libVLC en 127.0.0.1 (reintenta la conexión unos segundos: libVLC tarda en abrir el canal). */
+    private fun tunelVlc(c: Socket, metodo: String): Long {
+        var con: HttpURLConnection? = null
+        var intentos = 0
+        while (activo && con == null && intentos < 20) {
+            try {
+                val x = URL("http://127.0.0.1:" + vlcPuerto + "/live.ts").openConnection() as HttpURLConnection
+                x.connectTimeout = 3000
+                x.readTimeout = 20000
+                x.responseCode
+                con = x
+            } catch (e: IOException) {
+                intentos++
+                try { Thread.sleep(500) } catch (i: InterruptedException) { return 0L }
+            }
+        }
+        val x = con ?: run {
+            RegistroEmision.anotar("HLS→TS vía libVLC: no se pudo conectar con libVLC en el móvil")
+            return 0L
+        }
+        var total = 0L
+        try {
+            c.soTimeout = 0
+            val o = c.getOutputStream()
+            o.write(cabecera().toByteArray(Charsets.ISO_8859_1))
+            o.flush()
+            if (metodo == "HEAD") return 0L
+            val buf = ByteArray(65536)
+            val ent = x.inputStream
+            while (activo) {
+                val r = try { ent.read(buf) } catch (e: IOException) { -1 }
+                if (r < 0) break
+                o.write(buf, 0, r)
+                total += r
+            }
+            o.flush()
+        } finally {
+            try { x.disconnect() } catch (e: Throwable) { /* nada */ }
+        }
+        return total
     }
 
     private fun elegirVariante(base: String, txt: String): String? {
@@ -207,18 +261,18 @@ class RetransmisionHls(
             RegistroEmision.anotar("HLS→TS " + metodo + " " + linea.substringAfter(' ').substringBeforeLast(' ') + " · UA: " + uaTele)
             val l0 = if (listo.await(12, TimeUnit.SECONDS)) lista else null
             if (l0 == null) {
-                RegistroEmision.anotar("HLS→TS: sin lista propia (se usa libVLC o falló la preparación); se cierra esta conexión")
+                if (vlcPuerto > 0) {
+                    RegistroEmision.anotar("HLS→TS: canal servido con libVLC (puerto interno " + vlcPuerto + ")")
+                    total = tunelVlc(c, metodo)
+                    nota = "vía libVLC"
+                } else {
+                    RegistroEmision.anotar("HLS→TS: falló la preparación y libVLC no está activo; se cierra esta conexión")
+                }
                 return
             }
             c.soTimeout = 0
             val o = c.getOutputStream()
-            val cab = "HTTP/1.1 200 OK\r\n" +
-                "Content-Type: video/vnd.dlna.mpeg-tts\r\n" +
-                "Cache-Control: no-cache\r\n" +
-                "Access-Control-Allow-Origin: *\r\n" +
-                "transferMode.dlna.org: Streaming\r\n" +
-                "contentFeatures.dlna.org: DLNA.ORG_PN=AVC_TS_MP_HD_AAC_MULT5;DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\r\n" +
-                "Connection: close\r\n\r\n"
+            val cab = cabecera()
             o.write(cab.toByteArray(Charsets.ISO_8859_1))
             o.flush()
             if (metodo == "HEAD") return
