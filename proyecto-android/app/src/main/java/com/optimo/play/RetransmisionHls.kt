@@ -2,6 +2,7 @@ package com.optimo.play
 
 import android.content.Context
 import java.io.IOException
+import java.net.InetAddress
 import java.net.HttpURLConnection
 import java.net.ServerSocket
 import java.net.Socket
@@ -24,7 +25,9 @@ class RetransmisionHls(
     private val ua: String?,
     /** [Ajustes.calidadHls]: 0/1 máxima, 2 mínima, 3 hasta 720p, 4 hasta 480p. */
     private val calidad: Int,
-    private val opcionesVlc: List<String>
+    private val opcionesVlc: List<String>,
+    /** true: reproducción en el propio móvil (solo 127.0.0.1 y sin respaldo con libVLC; si no vale, la conexión se cierra). */
+    private val local: Boolean = false
 ) {
     private var ss: ServerSocket? = null
     @Volatile private var activo = false
@@ -38,7 +41,7 @@ class RetransmisionHls(
 
     /** Arranca el servidor y devuelve el puerto en el que se sirve «/live.ts». */
     fun iniciar(): Int {
-        val s = ServerSocket(0)
+        val s = if (local) ServerSocket(0, 8, InetAddress.getByName("127.0.0.1")) else ServerSocket(0)
         ss = s
         puerto = s.localPort
         activo = true
@@ -110,8 +113,13 @@ class RetransmisionHls(
             )
             listo.countDown()
         } catch (e: Exception) {
-            RegistroEmision.anotar("HLS→TS propio no vale (" + (e.message ?: e.javaClass.simpleName) + "): se usa libVLC")
-            respaldoVlc()
+            if (local) {
+                RegistroEmision.anotar("Modo compatible: este canal no se puede encadenar (" + (e.message ?: e.javaClass.simpleName) + ")")
+                listo.countDown()
+            } else {
+                RegistroEmision.anotar("HLS→TS propio no vale (" + (e.message ?: e.javaClass.simpleName) + "): se usa libVLC")
+                respaldoVlc()
+            }
         }
     }
 
