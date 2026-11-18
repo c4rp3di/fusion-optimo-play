@@ -33,6 +33,9 @@ class Retransmision(
         }
         val media = Media(v, Uri.parse(url))
         media.addOption(":network-caching=3000")
+        // HLS adaptativo: si libVLC cambia de variante a mitad (480p mono ↔ 720p estéreo) el TS cambia de resolución y de
+        // canales de audio, y los decodificadores de teles antiguas no lo aguantan. Se fija una sola calidad.
+        media.addOption(":adaptive-logic=highest")
         media.addOption(":sout=#std{access=http,mux=ts,dst=:" + puerto + "/live.ts}")
         media.addOption(":sout-keep")
         referer?.let { media.addOption(":http-referrer=$it") }
