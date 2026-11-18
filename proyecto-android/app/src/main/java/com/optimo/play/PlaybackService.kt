@@ -109,6 +109,9 @@ class PlaybackService : Service() {
     @Volatile private var megaOrigen: String? = null
     private var hiloMega: Thread? = null
     private var servidorMega: ServidorMega? = null
+    /** Cliente de Mega del enlace abierto y servidor en la red local para la tele (solo mientras se emite). */
+    private var clienteMega: MegaCliente? = null
+    private var megaLan: ServidorMega? = null
     @Volatile private var genMega = 0
     val esMega: Boolean get() = megaOrigen != null
     private val subsExternas = ArrayList<File>()
@@ -944,6 +947,9 @@ class PlaybackService : Service() {
         hiloMega = null
         servidorMega?.detener()
         servidorMega = null
+        megaLan?.detener()
+        megaLan = null
+        clienteMega = null
         megaOrigen = null
         necesitaClaveMega = false
         avisoClaveMega = null
@@ -1017,6 +1023,7 @@ class PlaybackService : Service() {
                             return@post
                         }
                         servidorMega = srv
+                        clienteMega = cli
                         estado = ""
                         titulo = nodo.nombre
                         ajustes.registrar(f.uri, nodo.nombre)
@@ -1051,6 +1058,7 @@ class PlaybackService : Service() {
                             return@post
                         }
                         servidorMega = srv
+                        clienteMega = cli
                         abrirCola(pistas, inicio, dir.nombre, true)
                     }
                 }
@@ -1329,10 +1337,6 @@ class PlaybackService : Service() {
             avisoUi = "No hay nada reproduciéndose que enviar"
             return
         }
-        if (megaOrigen != null) {
-            avisoUi = "Enviar a la tele todavía no funciona con enlaces de Mega"
-            return
-        }
         val m = mp
         val pos = if (posForzada >= 0L) posForzada else try { m?.time ?: 0L } catch (e: Throwable) { 0L }
         val len = try { m?.length ?: 0L } catch (e: Throwable) { 0L }
@@ -1346,7 +1350,31 @@ class PlaybackService : Service() {
         var mime = "video/mp4"
         var retransmitido = false
         val ta = archivoTorrentActual
-        if (esTorrent) {
+        if (megaOrigen != null) {
+            // Mega: el móvil descarga, descifra y sirve el archivo por la red local (la tele no sabe descifrar AES).
+            // La dirección local de libVLC lleva el identificador del archivo: se busca su nodo y se registra en el servidor LAN.
+            val ipL = Utiles.ipLan(this)
+            val handle = try { Uri.parse(url0).pathSegments.getOrNull(1) } catch (t: Throwable) { null }
+            val nodo = if (handle != null) servidorMega?.nodo(handle) else null
+            val cli = clienteMega
+            if (nodo == null || cli == null) {
+                srv.detener()
+                avisoUi = "El archivo de Mega aún no está listo para enviarlo"
+                return
+            }
+            if (ipL == null) {
+                srv.detener()
+                avisoUi = "No se pudo enviar: el móvil no está conectado a una red Wi-Fi"
+                return
+            }
+            val ml = megaLan ?: ServidorMega(cli, { msg ->
+                errorMega = msg
+                error = msg
+            }, true).also { megaLan = it }
+            url = ml.urlLan(nodo, ipL)
+            val t = Utiles.tipoMime(nodo.nombre)
+            mime = if (t == "application/octet-stream") "video/mp4" else t
+        } else if (esTorrent) {
             if (ta == null) {
                 avisoUi = "El torrent aún no está listo para enviarlo"
                 return
@@ -1432,6 +1460,8 @@ class PlaybackService : Service() {
         try { e?.parar() } catch (t: Throwable) { /* nada */ }
         lan?.detener()
         lan = null
+        megaLan?.detener()
+        megaLan = null
         retrans?.liberar()
         retrans = null
         if (e == null) return
