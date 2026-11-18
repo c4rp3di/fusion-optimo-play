@@ -239,3 +239,12 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
   Usa las opciones del módulo adaptive de libVLC (`adaptive-logic`, `adaptive-maxheight`). Vale para el móvil y para la tele: al emitir a una tele DLNA,
   «automática» equivale a «máxima» (una variante fija evita cambios de resolución dentro del TS). Si `adaptive-maxheight` no surte efecto en esta
   versión de libVLC, «hasta 720p/480p» se comportará como «máxima».
+
+## 0.7.6 — Registro de la emisión y MIME de MKV
+
+- **⋮ › Registro y compatibilidad de la tele** ahora empieza por un **registro** de la emisión (`RegistroEmision.kt`): cada petición que la tele hace al móvil
+  (método, ruta, `Range`, `User-Agent`, bytes enviados y si cortó), las acciones SOAP y su código HTTP, los cambios de estado de la tele
+  (`TRANSITIONING`, `PLAYING`, `STOPPED`…) y lo que se le declara (MIME, perfil DLNA). Debajo, la lista de formatos que acepta. «Copiar» lo saca todo.
+- **Sondeo del TS local:** en canales retransmitidos, a los 6 s el móvil se pide a sí mismo `/live.ts` y anota código, `Content-Type`, si el primer byte es `0x47`
+  y cuántos bytes salen en 4 s. Distingue «libVLC no emite» de «emite y la tele lo rechaza».
+- **MKV:** a teles DLNA se les sirve con `Content-Type: video/x-mkv` (el que anuncian en `GetProtocolInfo`) en vez de `video/x-matroska`. Chromecast no cambia.
