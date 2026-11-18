@@ -227,3 +227,8 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - Según `GetProtocolInfo` de una Samsung UE37ES5500, la tele solo anuncia MPEG-TS como `video/vnd.dlna.mpeg-tts` con perfil `AVC_TS_*`.
   La retransmisión de canales (HLS → TS) se declaraba como `video/mpeg` sin perfil; ahora se declara con `AVC_TS_MP_HD_AAC_MULT5`.
   Es una hipótesis sin probar en la tele; Chromecast no cambia.
+
+## 0.7.4 — Una sola calidad al retransmitir HLS
+
+- La retransmisión a teles DLNA fija la variante más alta del HLS (`:adaptive-logic=highest`). Antes libVLC podía saltar entre 480p mono y 720p estéreo
+  dentro del mismo TS, algo que los decodificadores antiguos no admiten. Hipótesis a partir de la pantalla Información de un canal; sin probar en la tele.
