@@ -70,6 +70,34 @@ object Informacion {
         }
     }
 
+    /** Pregunta a la tele DLNA qué formatos acepta y lo muestra (con «Copiar»). */
+    fun compatibilidadTele(act: Activity, d: DlnaDispositivo) {
+        val dp = act.resources.displayMetrics.density
+        val tv = TextView(act)
+        tv.setTypeface(Typeface.MONOSPACE)
+        tv.setTextSize(12f)
+        tv.setTextIsSelectable(true)
+        tv.setPadding((16 * dp).toInt(), (8 * dp).toInt(), (16 * dp).toInt(), (8 * dp).toInt())
+        tv.text = "Preguntando a la tele…"
+        val scroll = ScrollView(act)
+        scroll.addView(tv)
+        val dialogo = AlertDialog.Builder(act)
+            .setTitle("Compatibilidad de la tele")
+            .setView(scroll)
+            .setPositiveButton("Copiar") { _, _ ->
+                val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("Optimo Play", tv.text.toString()))
+                Toast.makeText(act, "Copiado", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cerrar", null)
+            .create()
+        dialogo.show()
+        Thread {
+            val r = Dlna.compatibilidad(d)
+            act.runOnUiThread { if (dialogo.isShowing) tv.text = r }
+        }.start()
+    }
+
     /** Texto con el estado actual del reproductor. */
     fun construir(s: PlaybackService): String {
         val sb = StringBuilder()
