@@ -260,3 +260,10 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - **Calidad:** ahora «Máxima/Mínima/Hasta 720p/Hasta 480p» elige de verdad la variante del manifiesto (en la tele).
 - El registro (⋮ › Registro y compatibilidad de la tele) anota variantes, elección, segmentos enviados y por qué se cierra cada conexión.
 - Sin probar en la tele; el cambio se hizo a partir del registro de una Samsung UE37ES5500.
+
+## 0.7.8 — Canales fMP4 a la tele
+
+- Algunos canales (p. ej. con 24 variantes y `EXT-X-MAP`) usan segmentos fMP4: no se pueden concatenar, así que se usa libVLC. libVLC emitía un TS válido
+  pero con `Content-Type: application/octet-stream` y sin cabeceras DLNA, y la Samsung no arrancaba. Ahora libVLC emite en un puerto interno y
+  `RetransmisionHls` lo canaliza a la tele con `video/vnd.dlna.mpeg-tts`, perfil y cabeceras DLNA, y lo anota en el registro (peticiones y bytes).
+- Sin probar en la tele.
