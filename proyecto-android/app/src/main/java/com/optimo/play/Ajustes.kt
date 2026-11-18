@@ -92,6 +92,27 @@ class Ajustes(ctx: Context) {
         get() = sp.getInt("decod", 0)
         set(v) { sp.edit().putInt("decod", v).apply() }
 
+    /**
+     * Calidad de los directos y flujos HLS con varias variantes: 0 automática, 1 máxima, 2 mínima, 3 hasta 720p, 4 hasta 480p.
+     * Al emitir a una tele DLNA, «automática» se trata como «máxima» (si la variante cambia a mitad, la tele no lo aguanta).
+     */
+    var calidadHls: Int
+        get() = sp.getInt("calidad_hls", 0)
+        set(v) { sp.edit().putInt("calidad_hls", v.coerceIn(0, 4)).apply() }
+
+    /** Opciones de media de libVLC (módulo adaptive) para la calidad elegida. */
+    fun opcionesCalidad(retransmision: Boolean): List<String> {
+        var c = calidadHls
+        if (c == 0 && retransmision) c = 1
+        return when (c) {
+            1 -> listOf(":adaptive-logic=highest")
+            2 -> listOf(":adaptive-logic=lowest")
+            3 -> listOf(":adaptive-logic=highest", ":adaptive-maxheight=720")
+            4 -> listOf(":adaptive-logic=highest", ":adaptive-maxheight=480")
+            else -> emptyList()
+        }
+    }
+
     /** Panel con velocidad, progreso y peers mientras suena un torrent. */
     var mostrarStats: Boolean
         get() = sp.getBoolean("stats", true)
