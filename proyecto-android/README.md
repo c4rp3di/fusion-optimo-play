@@ -267,3 +267,12 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
   pero con `Content-Type: application/octet-stream` y sin cabeceras DLNA, y la Samsung no arrancaba. Ahora libVLC emite en un puerto interno y
   `RetransmisionHls` lo canaliza a la tele con `video/vnd.dlna.mpeg-tts`, perfil y cabeceras DLNA, y lo anota en el registro (peticiones y bytes).
 - Sin probar en la tele.
+
+## 0.7.9 — Modo compatible para canales en el móvil
+
+- Motivo: un canal con anuncios insertados desde el servidor (La 1, Ottera) no arrancaba en el móvil —libVLC se quedaba en la variante más baja con el búfer a 0 %—
+  pero sí se veía en la tele, donde `RetransmisionHls` encadena los segmentos de una sola variante.
+- **⋮ › Modo compatible para canales** (se guarda; por defecto desactivado): en el móvil, libVLC lee `http://127.0.0.1:puerto/live.ts` en vez del HLS adaptativo.
+  Respeta la calidad de ⋮ › Calidad del vídeo («Automática» = máxima). Solo escucha en loopback. Si el canal no se puede encadenar (fMP4, cifrado),
+  la conexión se cierra, el registro lo explica y hay que desactivar el modo. Solo para canales (listas M3U), no afecta a archivos ni a Mega.
+- Con el modo activo el registro se limpia al abrir cada canal.
