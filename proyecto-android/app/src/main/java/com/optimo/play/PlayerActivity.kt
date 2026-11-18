@@ -91,6 +91,7 @@ class PlayerActivity : Activity() {
     private lateinit var panelCola: PanelCola
     private var panelColaAbierto = false
     private var pidiendoCarpeta = false
+    private var pidiendoClaveMega = false
     private var audioVisto = false
     private lateinit var filaBot: LinearLayout
     private lateinit var filaOpc: LinearLayout
@@ -413,7 +414,13 @@ class PlayerActivity : Activity() {
         }
         if (uri == null) return null
         val titulo = i.getStringExtra("title")?.takeIf { it.isNotBlank() } ?: Utiles.nombreDe(this, uri)
-        return Fuente(uri, titulo, i.getStringExtra("referer"), i.getStringExtra("user_agent"))
+        // Contraseña de un enlace de Mega protegido: como extra «password» o, al compartir texto, «Contraseña: xxx».
+        var clave: String? = null
+        if (MegaEnlace.esMega(uri)) {
+            clave = i.getStringExtra("password")?.takeIf { it.isNotEmpty() }
+            if (clave == null && i.action == Intent.ACTION_SEND) clave = MegaEnlace.claveEnTexto(i.getStringExtra(Intent.EXTRA_TEXT))
+        }
+        return Fuente(uri, titulo, i.getStringExtra("referer"), i.getStringExtra("user_agent"), clave)
     }
 
     // ---------------------------------------------------------------- interfaz
@@ -691,6 +698,28 @@ class PlayerActivity : Activity() {
     }
 
     /** El reproductor necesita acceso a la carpeta de la lista (o del audio): se explica y se abre el selector de carpetas. */
+    private fun dialogoClaveMega(s: PlaybackService) {
+        val campo = EditText(this)
+        campo.hint = "Contraseña"
+        campo.setSingleLine(true)
+        campo.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        val marco = FrameLayout(this)
+        marco.setPadding(dp(20), dp(8), dp(20), 0)
+        marco.addView(campo)
+        val aviso = s.avisoClaveMega
+        AlertDialog.Builder(this)
+            .setTitle("Enlace de Mega con contraseña")
+            .setMessage(
+                if (aviso != null) "$aviso. Vuelve a escribirla."
+                else "Este enlace está protegido. Escribe la contraseña para abrirlo."
+            )
+            .setView(marco)
+            .setPositiveButton("Abrir") { _, _ -> s.darClaveMega(campo.text.toString()) }
+            .setNegativeButton("Cancelar") { _, _ -> s.claveMegaRechazada() }
+            .setOnCancelListener { s.claveMegaRechazada() }
+            .show()
+    }
+
     private fun dialogoCarpeta(s: PlaybackService, doc: Uri) {
         val nombre = Utiles.nombreDe(this, doc.toString())
         AlertDialog.Builder(this)
@@ -1227,6 +1256,16 @@ class PlayerActivity : Activity() {
             }
         } else {
             pidiendoCarpeta = false
+        }
+
+        // Enlace de Mega protegido: se pide la contraseña (otra vez si la dada era incorrecta).
+        if (s.necesitaClaveMega) {
+            if (!pidiendoClaveMega) {
+                pidiendoClaveMega = true
+                dialogoClaveMega(s)
+            }
+        } else {
+            pidiendoClaveMega = false
         }
 
         // Lista de canales: el panel se abre solo al cargarla, hasta que se elija uno.
