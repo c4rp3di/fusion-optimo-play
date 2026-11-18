@@ -1523,6 +1523,12 @@ class PlayerActivity : Activity() {
         etiquetas.add("Decodificación de vídeo"); acciones.add { menuDecodificacion() }
         if (s.hayCanales || (s.urlReproduccion ?: "").contains("m3u8", true)) {
             etiquetas.add("Calidad del vídeo (canales)"); acciones.add { menuCalidad() }
+            etiquetas.add("Modo compatible para canales: " + (if (aj.canalesCompatibles) "sí" else "no") + " (si un canal no arranca)")
+            acciones.add {
+                aj.canalesCompatibles = !aj.canalesCompatibles
+                aviso(if (aj.canalesCompatibles) "Modo compatible activado" else "Modo compatible desactivado")
+                svc?.reconstruir()
+            }
         }
         if (s.esTorrent) {
             etiquetas.add("Estadísticas del torrent: " + (if (aj.mostrarStats) "sí" else "no"))
