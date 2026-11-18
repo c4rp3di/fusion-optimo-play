@@ -59,7 +59,7 @@ class MainActivity : Activity() {
         raiz.addView(cab)
 
         entrada = EditText(this)
-        entrada.hint = "URL, magnet o enlace a .torrent"
+        entrada.hint = "URL, magnet, .torrent o enlace de Mega"
         entrada.setSingleLine(true)
         entrada.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
         entrada.imeOptions = EditorInfo.IME_ACTION_GO
@@ -117,7 +117,8 @@ class MainActivity : Activity() {
         lista = ListView(this)
         lista.setOnItemClickListener { _, _, i, _ ->
             val r = recientes.getOrNull(i) ?: return@setOnItemClickListener
-            reproducir(r.uri.substringBefore("#"), r.titulo)
+            // En los enlaces de Mega la clave va tras el #: no se puede quitar.
+            reproducir(if (MegaEnlace.esMega(r.uri)) r.uri else r.uri.substringBefore("#"), r.titulo)
         }
         lista.setOnItemLongClickListener { _, _, i, _ ->
             val r = recientes.getOrNull(i) ?: return@setOnItemLongClickListener true
@@ -149,19 +150,23 @@ class MainActivity : Activity() {
     }
 
     private fun reproducirTexto() {
-        val t = Utiles.primerEnlace(entrada.text.toString().trim()) ?: entrada.text.toString().trim()
+        val texto = entrada.text.toString().trim()
+        val t = Utiles.primerEnlace(texto) ?: texto
         if (t.isEmpty()) {
-            Toast.makeText(this, "Pega una URL o un magnet", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Pega una URL, un magnet o un enlace de Mega", Toast.LENGTH_SHORT).show()
             return
         }
-        reproducir(t, Utiles.nombreDe(this, t))
+        // Enlace de Mega protegido pegado junto con su «Contraseña: xxx»: se pasa ya; si no, el reproductor la pide.
+        val clave = if (MegaEnlace.esMega(t)) MegaEnlace.claveEnTexto(texto) else null
+        reproducir(t, Utiles.nombreDe(this, t), clave)
     }
 
-    private fun reproducir(uri: String, titulo: String) {
+    private fun reproducir(uri: String, titulo: String, clave: String? = null) {
         val i = Intent(this, PlayerActivity::class.java)
         i.action = Intent.ACTION_VIEW
         i.data = Uri.parse(uri)
         i.putExtra("title", titulo)
+        if (clave != null) i.putExtra("password", clave)
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         startActivity(i)
     }
