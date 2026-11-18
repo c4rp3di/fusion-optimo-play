@@ -1330,7 +1330,7 @@ class PlaybackService : Service() {
         private set
     private var lan: ServidorLan? = null
     private var enviarPausaLocal = false
-    private var retrans: Retransmision? = null
+    private var retrans: RetransmisionHls? = null
 
     /** Manda lo que suena a una tele. El móvil se queda sirviendo el archivo si es del torrent o del dispositivo. */
     fun emitirA(d: Destino, posForzada: Long = -1L) {
@@ -1398,7 +1398,7 @@ class PlaybackService : Service() {
                 // Las teles DLNA antiguas no entienden HLS ni https: el móvil lo re-emite como MPEG-TS por HTTP.
                 retrans?.liberar()
                 retrans = null
-                val r = Retransmision(applicationContext, url0, f.referer, f.ua, ajustes.opcionesCalidad(true))
+                val r = RetransmisionHls(applicationContext, url0, f.referer, f.ua, ajustes.calidadHls, ajustes.opcionesCalidad(true))
                 val p = try { r.iniciar() } catch (t: Throwable) { -1 }
                 if (p > 0) {
                     retrans = r
