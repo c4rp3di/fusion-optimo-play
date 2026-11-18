@@ -1523,6 +1523,7 @@ class PlayerActivity : Activity() {
         etiquetas.add("Decodificación de vídeo"); acciones.add { menuDecodificacion() }
         if (s.hayCanales || (s.urlReproduccion ?: "").contains("m3u8", true)) {
             etiquetas.add("Calidad del vídeo (canales)"); acciones.add { menuCalidad() }
+            etiquetas.add("Registro del canal"); acciones.add { Informacion.registro(this) }
             etiquetas.add("Modo compatible para canales: " + (if (aj.canalesCompatibles) "sí" else "no") + " (si un canal no arranca)")
             acciones.add {
                 aj.canalesCompatibles = !aj.canalesCompatibles
