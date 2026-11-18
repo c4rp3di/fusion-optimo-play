@@ -100,6 +100,14 @@ class Ajustes(ctx: Context) {
         get() = sp.getInt("calidad_hls", 0)
         set(v) { sp.edit().putInt("calidad_hls", v.coerceIn(0, 4)).apply() }
 
+    /**
+     * Canales HLS en el móvil por «modo compatible»: el móvil baja los segmentos .ts de una sola variante y se los pasa a libVLC como un
+     * único flujo continuo (como se hace para la tele), en vez de dejar que libVLC gestione el HLS adaptativo. Para canales que no arrancan.
+     */
+    var canalesCompatibles: Boolean
+        get() = sp.getBoolean("canales_compat", false)
+        set(v) { sp.edit().putBoolean("canales_compat", v).apply() }
+
     /** Opciones de media de libVLC (módulo adaptive) para la calidad elegida. */
     fun opcionesCalidad(retransmision: Boolean): List<String> {
         var c = calidadHls
