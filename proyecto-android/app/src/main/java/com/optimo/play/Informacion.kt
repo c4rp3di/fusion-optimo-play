@@ -82,7 +82,7 @@ object Informacion {
         val scroll = ScrollView(act)
         scroll.addView(tv)
         val dialogo = AlertDialog.Builder(act)
-            .setTitle("Compatibilidad de la tele")
+            .setTitle("Registro y compatibilidad de la tele")
             .setView(scroll)
             .setPositiveButton("Copiar") { _, _ ->
                 val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -94,7 +94,9 @@ object Informacion {
         dialogo.show()
         Thread {
             val r = Dlna.compatibilidad(d)
-            act.runOnUiThread { if (dialogo.isShowing) tv.text = r }
+            act.runOnUiThread {
+                if (dialogo.isShowing) tv.text = RegistroEmision.texto() + "\n\n" + r
+            }
         }.start()
     }
 
