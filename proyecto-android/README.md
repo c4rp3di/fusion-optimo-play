@@ -248,3 +248,15 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - **Sondeo del TS local:** en canales retransmitidos, a los 6 s el móvil se pide a sí mismo `/live.ts` y anota código, `Content-Type`, si el primer byte es `0x47`
   y cuántos bytes salen en 4 s. Distingue «libVLC no emite» de «emite y la tele lo rechaza».
 - **MKV:** a teles DLNA se les sirve con `Content-Type: video/x-mkv` (el que anuncian en `GetProtocolInfo`) en vez de `video/x-matroska`. Chromecast no cambia.
+
+## 0.7.7 — Canales HLS a la tele sin libVLC
+
+- **Motivo:** el registro de 0.7.6 mostró que la retransmisión con libVLC (`sout`) abría el canal pero no emitía ningún byte (`Sondeo del TS local: 0 B`).
+  El MKV de Mega ya funcionaba con `Content-Type: video/x-mkv` (0.7.6).
+- **`RetransmisionHls.kt`:** para canales HLS cuyos segmentos son `.ts` (H.264 + AAC), el móvil elige una sola variante (según ⋮ › Calidad del vídeo),
+  baja los segmentos y los sirve concatenados en `/live.ts` como `video/vnd.dlna.mpeg-tts` con perfil `AVC_TS_MP_HD_AAC_MULT5`.
+  Empieza por los 2 últimos segmentos y sigue sondeando la lista. Referer y User-Agent del canal se respetan.
+- **Respaldo:** si los segmentos son fMP4/CMAF, están cifrados (AES-128) o no son `.ts`, se usa libVLC (`Retransmision`) en el mismo puerto.
+- **Calidad:** ahora «Máxima/Mínima/Hasta 720p/Hasta 480p» elige de verdad la variante del manifiesto (en la tele).
+- El registro (⋮ › Registro y compatibilidad de la tele) anota variantes, elección, segmentos enviados y por qué se cierra cada conexión.
+- Sin probar en la tele; el cambio se hizo a partir del registro de una Samsung UE37ES5500.
