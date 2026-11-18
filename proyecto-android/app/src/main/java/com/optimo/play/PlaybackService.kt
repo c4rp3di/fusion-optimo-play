@@ -98,6 +98,19 @@ class PlaybackService : Service() {
     private var posReanudar = 0L
     private var inicioHecho = false
     private var hiloTorrent: Thread? = null
+    // ---- enlaces de Mega (archivo o carpeta, con o sin contraseña)
+    /** El enlace de Mega pide contraseña (o la que se dio era incorrecta): la actividad enseña el diálogo. */
+    @Volatile var necesitaClaveMega = false
+    /** Motivo que se muestra en el diálogo de contraseña (p. ej. «Contraseña incorrecta»). */
+    @Volatile var avisoClaveMega: String? = null
+    /** Último fallo notificado por Mega al servir el contenido (cuota agotada, enlace caído…). */
+    @Volatile var errorMega: String? = null
+    /** Enlace de Mega que se está reproduciendo (también cuando es una carpeta que pasa a cola). */
+    @Volatile private var megaOrigen: String? = null
+    private var hiloMega: Thread? = null
+    private var servidorMega: ServidorMega? = null
+    @Volatile private var genMega = 0
+    val esMega: Boolean get() = megaOrigen != null
     private val subsExternas = ArrayList<File>()
     @Volatile var archivoTorrentActual: ArchivoTorrent? = null
         private set
@@ -200,6 +213,7 @@ class PlaybackService : Service() {
         guardarPos()
         try { unregisterReceiver(ruidoso) } catch (e: Exception) { /* nada */ }
         hiloTorrent?.interrupt()
+        cerrarMega()
         volverALocal(false)
         destruirReproductor()
         liberarBloqueos()
@@ -226,6 +240,8 @@ class PlaybackService : Service() {
      * terminó o nunca llegó a sonar: así reenviar la misma URL desde Optimo vuelve a intentarlo.
      */
     fun debeAbrir(uri: String): Boolean {
+        // Una carpeta de Mega pasa a cola de reproducción (la fuente pasa a ser la dirección local de cada pista).
+        if (megaOrigen == uri && mp != null && error == null && !fin) return false
         if (fuente?.uri != uri) return true
         if (mp == null) return true
         return error != null || fin
@@ -237,8 +253,10 @@ class PlaybackService : Service() {
         guardarPos()
         hiloTorrent?.interrupt()
         motor.cerrar()
+        cerrarMega()
         limpiarCola()
         error = null
+        errorMega = null
         fin = false
         estado = ""
         ultimoEvento = ""
@@ -257,8 +275,9 @@ class PlaybackService : Service() {
         fuente = f
         titulo = f.titulo
         claveRep = f.uri
-        esTorrent = f.uri.startsWith("magnet:", true) || Utiles.esArchivoTorrent(f.uri) ||
-            esContenidoTorrent(f.uri)
+        val mega = MegaEnlace.esMega(f.uri)
+        esTorrent = !mega && (f.uri.startsWith("magnet:", true) || Utiles.esArchivoTorrent(f.uri) ||
+            esContenidoTorrent(f.uri))
         if (!esTorrent) {
             // Los torrents se anotan cuando se sabe qué archivo suena (prepararArchivo).
             ajustes.registrar(f.uri, f.titulo)
@@ -266,7 +285,9 @@ class PlaybackService : Service() {
         }
         primerPlano()
         crearReproductor()
-        if (esTorrent) {
+        if (mega) {
+            abrirMega(f)
+        } else if (esTorrent) {
             abrirTorrent(f)
         } else if (puedeSerLista(f.uri)) {
             abrirPosibleLista(f)
@@ -293,11 +314,12 @@ class PlaybackService : Service() {
     }
 
     /** Empieza a reproducir una cola de archivos locales desde la pista [indice]. */
-    fun abrirCola(pistas: List<Pista>, indice: Int, titulo: String) {
+    fun abrirCola(pistas: List<Pista>, indice: Int, titulo: String, conservarMega: Boolean = false) {
         if (pistas.isEmpty()) return
         guardarPos()
         hiloTorrent?.interrupt()
         motor.cerrar()
+        if (!conservarMega) cerrarMega()
         error = null
         fin = false
         estado = ""
@@ -332,6 +354,7 @@ class PlaybackService : Service() {
         claveRep = "" // sin posición que recordar por pista
         posReanudar = 0L
         error = null
+        errorMega = null
         fin = false
         estado = ""
         ultimoEvento = ""
@@ -913,6 +936,160 @@ class PlaybackService : Service() {
         }
     }
 
+    // ---------------------------------------------------------------- Mega
+
+    private fun cerrarMega() {
+        genMega++
+        hiloMega?.interrupt()
+        hiloMega = null
+        servidorMega?.detener()
+        servidorMega = null
+        megaOrigen = null
+        necesitaClaveMega = false
+        avisoClaveMega = null
+    }
+
+    /**
+     * Abre un enlace de Mega: archivo suelto (se reproduce directamente) o carpeta (pasa a cola con sus audios y vídeos).
+     * Si el enlace está protegido con contraseña (#P!…) se usa la dada, la recordada en esta sesión o se pide en pantalla.
+     * Todo el trabajo de red va en un hilo; el contenido llega a libVLC por un servidor local que lo va descifrando.
+     */
+    private fun abrirMega(f: Fuente) {
+        val gen = ++genMega
+        hiloMega?.interrupt()
+        megaOrigen = f.uri
+        errorMega = null
+        necesitaClaveMega = false
+        estado = "Conectando con Mega…"
+        val t = Thread {
+            try {
+                var enl = MegaEnlace.analizar(f.uri)
+                    ?: throw MegaException(MegaException.GENERAL, "No reconozco este enlace de Mega")
+                if (enl.protegido != null) {
+                    val pass = f.clave ?: MegaClaves.obtener(f.uri)
+                    if (pass == null) {
+                        if (gen == genMega) {
+                            avisoClaveMega = null
+                            estado = "Este enlace de Mega tiene contraseña"
+                            necesitaClaveMega = true
+                        }
+                        return@Thread
+                    }
+                    estado = "Comprobando la contraseña…"
+                    enl = try {
+                        MegaEnlace.desproteger(enl, pass)
+                    } catch (e: MegaException) {
+                        if (e.codigo == MegaException.CLAVE_INCORRECTA) {
+                            MegaClaves.olvidar(f.uri)
+                            if (gen == genMega) {
+                                avisoClaveMega = e.message
+                                estado = "Este enlace de Mega tiene contraseña"
+                                necesitaClaveMega = true
+                            }
+                            return@Thread
+                        }
+                        throw e
+                    }
+                    MegaClaves.guardar(f.uri, pass)
+                }
+                val clave = enl.clave
+                    ?: throw MegaException(
+                        MegaException.GENERAL,
+                        "Al enlace le falta la clave (lo que va detrás del #). Copia el enlace completo"
+                    )
+                val datos = enl
+                if (clave.size != (if (datos.carpeta) 16 else 32)) {
+                    throw MegaException(MegaException.GENERAL, "La clave del enlace no tiene el tamaño correcto: ¿está completo el enlace?")
+                }
+                val sub = datos.sub
+                estado = "Consultando Mega…"
+                val cli = MegaCliente(if (datos.carpeta) datos.handle else null)
+                val srv = ServidorMega(cli) { m ->
+                    errorMega = m
+                    error = m
+                }
+                if (!datos.carpeta) {
+                    val nodo = cli.infoArchivo(datos.handle, clave)
+                    val url = srv.url(nodo)
+                    main.post {
+                        if (gen != genMega) {
+                            srv.detener()
+                            return@post
+                        }
+                        servidorMega = srv
+                        estado = ""
+                        titulo = nodo.nombre
+                        ajustes.registrar(f.uri, nodo.nombre)
+                        crearReproductor()
+                        reproducir(url, f)
+                    }
+                } else {
+                    val dir = cli.listarCarpeta(clave)
+                    var lista = dir.archivos.filter { Utiles.esReproducible(it.nombre) }
+                    if (sub != null && datos.subCarpeta) lista = lista.filter { it.padres.contains(sub) }
+                    if (lista.isEmpty()) {
+                        throw MegaException(
+                            MegaException.GENERAL,
+                            if (dir.archivos.isEmpty()) "La carpeta de Mega está vacía"
+                            else "La carpeta de Mega no tiene audio ni vídeo que reproducir"
+                        )
+                    }
+                    lista = lista.sortedWith { a, b ->
+                        val c = Utiles.comparaNatural(a.ruta, b.ruta)
+                        if (c != 0) c else Utiles.comparaNatural(a.nombre, b.nombre)
+                    }
+                    val variasRutas = lista.map { it.ruta }.distinct().size > 1
+                    val pistas = lista.map {
+                        val base = Utiles.sinExtension(it.nombre)
+                        Pista(srv.url(it), it.nombre, if (variasRutas && it.ruta.isNotEmpty()) it.ruta + " / " + base else base)
+                    }
+                    var inicio = 0
+                    if (sub != null && !datos.subCarpeta) inicio = lista.indexOfFirst { it.handle == sub }.coerceAtLeast(0)
+                    main.post {
+                        if (gen != genMega) {
+                            srv.detener()
+                            return@post
+                        }
+                        servidorMega = srv
+                        abrirCola(pistas, inicio, dir.nombre, true)
+                    }
+                }
+            } catch (e: InterruptedException) {
+                // Cancelado por otra apertura.
+            } catch (e: MegaException) {
+                if (gen == genMega) {
+                    estado = ""
+                    error = e.message
+                }
+            } catch (e: Exception) {
+                if (gen == genMega) {
+                    estado = ""
+                    error = "No se pudo abrir el enlace de Mega: " + (e.message ?: e.javaClass.simpleName)
+                }
+            }
+        }
+        hiloMega = t
+        t.start()
+    }
+
+    /** El usuario escribió la contraseña de un enlace protegido: se vuelve a intentar abrirlo. */
+    fun darClaveMega(clave: String) {
+        val f = fuente ?: return
+        if (!MegaEnlace.esMega(f.uri)) return
+        necesitaClaveMega = false
+        avisoClaveMega = null
+        abrirMega(f.copy(clave = clave))
+    }
+
+    /** El usuario cerró el diálogo sin dar la contraseña. */
+    fun claveMegaRechazada() {
+        if (!necesitaClaveMega) return
+        necesitaClaveMega = false
+        avisoClaveMega = null
+        estado = ""
+        error = "Sin la contraseña no se puede abrir este enlace de Mega"
+    }
+
     // ---------------------------------------------------------------- torrent
 
     private fun abrirTorrent(f: Fuente) {
@@ -1047,7 +1224,12 @@ class PlaybackService : Service() {
                         }
                     }
                     MediaPlayer.Event.EncounteredError -> {
-                        if (hayCola && cola.size > 1 && fallosSeguidos < cola.size - 1) {
+                        val em = errorMega
+                        if (em != null) {
+                            // Mega ya dijo por qué (cuota agotada, enlace caído…): no tiene sentido saltar de pista en pista.
+                            error = em
+                            liberarBloqueos()
+                        } else if (hayCola && cola.size > 1 && fallosSeguidos < cola.size - 1) {
                             // Una pista rota no para la cola: se salta a la siguiente.
                             fallosSeguidos++
                             val rota = cola.getOrNull(colaActual)?.titulo ?: ""
@@ -1145,6 +1327,10 @@ class PlaybackService : Service() {
         val url0 = ultimaUrl
         if (f == null || url0 == null) {
             avisoUi = "No hay nada reproduciéndose que enviar"
+            return
+        }
+        if (megaOrigen != null) {
+            avisoUi = "Enviar a la tele todavía no funciona con enlaces de Mega"
             return
         }
         val m = mp
