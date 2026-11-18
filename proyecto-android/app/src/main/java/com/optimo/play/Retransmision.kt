@@ -31,7 +31,16 @@ class Retransmision(
         val v = LibVLC(ctx.applicationContext, arrayListOf("--no-drop-late-frames"))
         val m = MediaPlayer(v)
         m.setEventListener { ev ->
-            if (ev.type == MediaPlayer.Event.EncounteredError) error = "No se pudo abrir el canal para retransmitirlo"
+            when (ev.type) {
+                MediaPlayer.Event.Opening -> RegistroEmision.anotar("Retransmisión: libVLC abriendo el canal")
+                MediaPlayer.Event.Playing -> RegistroEmision.anotar("Retransmisión: libVLC reproduciendo")
+                MediaPlayer.Event.Stopped -> RegistroEmision.anotar("Retransmisión: libVLC parado")
+                MediaPlayer.Event.EndReached -> RegistroEmision.anotar("Retransmisión: libVLC llegó al final")
+                MediaPlayer.Event.EncounteredError -> {
+                    RegistroEmision.anotar("Retransmisión: libVLC dio error")
+                    error = "No se pudo abrir el canal para retransmitirlo"
+                }
+            }
         }
         val media = Media(v, Uri.parse(url))
         media.addOption(":network-caching=3000")
