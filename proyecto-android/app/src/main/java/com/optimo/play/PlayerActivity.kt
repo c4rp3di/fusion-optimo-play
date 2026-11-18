@@ -1513,7 +1513,7 @@ class PlayerActivity : Activity() {
         if (s.emisor != null) {
             val dd = s.destinoEmision?.datos
             if (dd is DlnaDispositivo) {
-                etiquetas.add("Compatibilidad de la tele (formatos)"); acciones.add { Informacion.compatibilidadTele(this, dd) }
+                etiquetas.add("Registro y compatibilidad de la tele"); acciones.add { Informacion.compatibilidadTele(this, dd) }
             }
             etiquetas.add("Dejar de emitir (volver al móvil)"); acciones.add { s.volverALocal(true) }
         } else if (s.urlReproduccion != null && s.mp != null) {
