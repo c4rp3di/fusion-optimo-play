@@ -255,6 +255,7 @@ class PlaybackService : Service() {
     /** Empieza a reproducir una fuente nueva (URL, archivo, magnet o .torrent). */
     fun abrir(f: Fuente) {
         sinSubsTemporal = false
+        compatTemporal = false
         guardarPos()
         hiloTorrent?.interrupt()
         motor.cerrar()
@@ -765,6 +766,7 @@ class PlaybackService : Service() {
         val lista = canales
         if (i !in lista.indices) return
         sinSubsTemporal = false
+        compatTemporal = false
         val lf = fuente ?: return
         val c = lista[i]
         necesitaElegirCanal = false
@@ -901,7 +903,7 @@ class PlaybackService : Service() {
             maestro?.detener()
             hlsLocal?.liberar()
             hlsLocal = null
-            if (ajustes.canalesCompatibles) {
+            if (ajustes.canalesCompatibles || compatTemporal) {
                 // Modo compatible: libVLC lee un TS continuo de 127.0.0.1 en vez del HLS adaptativo.
                 RegistroEmision.limpiar()
                 val rl = RetransmisionHls(applicationContext, url, f.referer, f.ua, ajustes.calidadHls, emptyList(), true)
@@ -938,7 +940,7 @@ class PlaybackService : Service() {
         }
         m.play()
         main.removeCallbacks(vigilanteInicio)
-        main.postDelayed(vigilanteInicio, 12_000L)
+        main.postDelayed(vigilanteInicio, 10_000L)
     }
 
     /**
@@ -948,8 +950,19 @@ class PlaybackService : Service() {
     private val vigilanteInicio = Runnable {
         if (mp != null && !inicioHecho && error == null) {
             val u = ultimaUrl ?: ""
+            val f = fuenteActiva
+            val esCanalHls = f != null && canales.isNotEmpty() && u.startsWith("http", true) && u.contains("m3u8", true)
+            if (esCanalHls && f != null && !ajustes.canalesCompatibles && !compatTemporal && emisor == null) {
+                // Un canal HLS que no arranca en 10 s se reintenta una vez en modo compatible (libVLC no sabe con su HLS adaptativo).
+                compatTemporal = true
+                posReanudar = 0L
+                RegistroEmision.anotar("El canal no arrancó en 10 s: se reabre en modo compatible")
+                avisoUi = "El canal no arrancaba: se reabre en modo compatible"
+                reproducir(u, f)
+                return@Runnable
+            }
             val corta = if (u.length > 90) u.substring(0, 90) + "…" else u
-            error = "No ha empezado a reproducir tras 12 s (libVLC: " +
+            error = "No ha empezado a reproducir tras 10 s (libVLC: " +
                 (if (ultimoEvento.isEmpty()) "sin respuesta" else ultimoEvento) +
                 ").\n" + corta + "\nMás detalles en ⋮ › Información"
         }
@@ -1865,6 +1878,9 @@ class PlaybackService : Service() {
      */
     /** Los subtítulos incluidos congelaron este canal: se reabre sin ellos hasta cambiar de canal. */
     @Volatile private var sinSubsTemporal = false
+
+    /** El canal no arrancó en 10 s: se reabrió en «modo compatible» (HLS→TS propio) hasta cambiar de canal. No toca el ajuste guardado. */
+    @Volatile private var compatTemporal = false
 
     fun elegirSubtitulo(id: Int) {
         val m = mp ?: return
