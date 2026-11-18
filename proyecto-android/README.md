@@ -200,7 +200,18 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
   - Mega limita la transferencia de las conexiones sin cuenta: si se agota, el reproductor lo avisa («límite de transferencia») y hay que esperar o cambiar de red.
   - Los enlaces protegidos con el algoritmo antiguo (versión 1) no están soportados; los actuales usan la versión 2.
   - No hay cuenta de Mega: solo enlaces públicos. Carpetas muy grandes tardan en listarse.
-  - **Enviar a la tele** todavía no funciona con Mega (avisa); el móvil sirve el contenido solo para sí mismo.
+  - **Enviar a la tele** con Mega: ver 0.7.1.
   - En «Información» la clave del enlace se oculta (el botón «Copiar» no la saca del móvil).
   - Esto no se pudo compilar ni probar contra Mega real en el entorno donde se escribió; la criptografía (contraseña, AES-CTR por rangos, atributos)
     se comprobó con un script aparte contra el formato documentado.
+
+## 0.7.1 — Enlaces de Mega a la tele
+
+- **⋮ › Enviar a la tele…** ya funciona con enlaces de Mega (archivo suelto o carpeta), a DLNA/Samsung y a Chromecast.
+- **Cómo:** la tele no sabe descifrar el AES-CTR de Mega, así que el móvil sigue descargando y descifrando y lo sirve por la Wi-Fi
+  (`ServidorMega` con `lan = true`: escucha en la red local, ruta con token aleatorio, Range, CORS y cabeceras DLNA). Solo existe mientras se emite.
+- **Carpetas:** cambiar de pista de la cola mientras se emite manda el archivo nuevo a la misma pantalla. Los subtítulos SRT/WebVTT cargados se envían como siempre.
+- **Límites:** el móvil debe seguir encendido y en la misma Wi-Fi; la cuota de transferencia de Mega se gasta igual (el móvil no descarga por duplicado:
+  mientras emite, el reproductor local queda en pausa). La tele debe entender el códec (H.264/AAC/AC3; HEVC en teles antiguas no).
+- **Dónde mirar si algo falla:** `PlaybackService.emitirA` (rama `megaOrigen`) y `ServidorMega.kt` (`lan`, `urlLan`).
+- No compilado ni probado contra una tele real en el entorno donde se escribió.
