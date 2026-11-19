@@ -797,21 +797,44 @@ class PlaybackService : Service() {
     private fun iniciarGuia(f: Fuente) {
         val manual = ajustes.guiaDe(f.uri)
         val url = if (manual.isNotEmpty()) manual else (urlGuiaCabecera ?: "")
+        // Canales que traen su propia guía (favoritos y listas propias hechas con canales de varias listas).
+        val extras = canales.mapNotNull { c -> c.guia?.takeIf { it.isNotBlank() && it != url } }.distinct().take(8)
+        if (url.isEmpty() && extras.isNotEmpty()) {
+            cargarGuia(url, extras)
+            return
+        }
         if (url.isEmpty()) {
             guia = null
             estadoGuia = "Esta lista no indica ninguna guía de programación. Si tienes la dirección de una (XMLTV, .xml o .xml.gz), puedes ponerla a mano."
             return
         }
-        cargarGuia(url)
+        cargarGuia(url, extras)
     }
 
-    private fun cargarGuia(url: String) {
+    private fun cargarGuia(url: String, extras: List<String> = emptyList()) {
         val lista = fuente?.uri
         estadoGuia = "Descargando la guía…"
         guia = null
         Thread {
             try {
-                val g = Guia.cargar(this, url)
+                var fallo: String? = null
+                var principal: Guia? = null
+                if (url.isNotEmpty()) {
+                    try {
+                        principal = Guia.cargar(this, url)
+                    } catch (e: Exception) {
+                        fallo = e.message ?: e.javaClass.simpleName
+                    }
+                }
+                val otras = HashMap<String, Guia>()
+                for (u in extras) {
+                    try {
+                        otras[u] = Guia.cargar(this, u)
+                    } catch (e: Exception) {
+                        if (fallo == null) fallo = e.message ?: e.javaClass.simpleName
+                    }
+                }
+                val g = principal?.conOtras(otras) ?: if (otras.isNotEmpty()) Guia(emptyMap(), emptyMap(), otras) else throw java.io.IOException(fallo ?: "sin guía")
                 main.post {
                     if (fuente?.uri != lista) return@post
                     guia = g
