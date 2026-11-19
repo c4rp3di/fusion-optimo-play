@@ -209,6 +209,7 @@ object Biblioteca {
                 if (!x.tvgId.isNullOrBlank()) sb.append(" tvg-id=\"").append(limpiarNombre(x.tvgId)).append('"')
                 if (x.numero > 0) sb.append(" tvg-chno=\"").append(x.numero).append('"')
                 if (!x.logo.isNullOrBlank()) sb.append(" tvg-logo=\"").append(limpiarNombre(x.logo)).append('"')
+                if (!x.guia.isNullOrBlank()) sb.append(" x-guia=\"").append(limpiarNombre(x.guia)).append('"')
                 sb.append(" group-title=\"").append(g).append("\",").append(limpiarNombre(x.nombre)).append('\n')
                 if (!x.referer.isNullOrBlank()) sb.append("#EXTVLCOPT:http-referrer=").append(limpiarNombre(x.referer)).append('\n')
                 if (!x.ua.isNullOrBlank()) sb.append("#EXTVLCOPT:http-user-agent=").append(limpiarNombre(x.ua)).append('\n')
@@ -228,17 +229,17 @@ object Biblioteca {
     @Synchronized
     fun anadir(ctx: Context, id: String, nuevos: List<Canal>, grupo: String?, urlGuia: String? = null): Int {
         val k = contenido(ctx, id)
-        val guiaNueva = adoptarGuia(k, urlGuia)
         val tiene = k.canales.map { it.clave }.toHashSet()
         var n = 0
         for (c in nuevos) {
             if (!tiene.add(c.clave)) continue
-            val d = if (grupo != null) c.copy(grupo = grupo) else c
+            val g = conGuia(c, urlGuia)
+            val d = if (grupo != null) g.copy(grupo = grupo) else g
             k.canales.add(d)
             if (!k.grupos.contains(d.grupo)) k.grupos.add(d.grupo)
             n++
         }
-        if (n > 0 || guiaNueva) guardarContenido(ctx, id, k)
+        if (n > 0) guardarContenido(ctx, id, k)
         return n
     }
 
@@ -248,8 +249,7 @@ object Biblioteca {
         val k = contenido(ctx, ID_FAV)
         val i = k.canales.indexOfFirst { it.clave == c.clave }
         if (activo && i < 0) {
-            adoptarGuia(k, urlGuia)
-            k.canales.add(c)
+            k.canales.add(conGuia(c, urlGuia))
             if (!k.grupos.contains(c.grupo)) k.grupos.add(c.grupo)
             guardarContenido(ctx, ID_FAV, k)
         } else if (!activo && i >= 0) {
@@ -265,25 +265,19 @@ object Biblioteca {
         val k = contenido(ctx, ID_FAV)
         val tiene = k.canales.map { it.clave }.toHashSet()
         var cambio = false
-        var hay = false
         for (c in canales) {
             if (favs.contains(c.clave) && tiene.add(c.clave)) {
-                k.canales.add(c)
+                k.canales.add(conGuia(c, urlGuia))
                 if (!k.grupos.contains(c.grupo)) k.grupos.add(c.grupo)
                 cambio = true
-                hay = true
             }
         }
-        if (hay && adoptarGuia(k, urlGuia)) cambio = true
         if (cambio) guardarContenido(ctx, ID_FAV, k)
     }
 
-    /** Una lista solo tiene una guía: si aún no tiene y los canales nuevos vienen con una, se queda con esa. */
-    private fun adoptarGuia(k: ContenidoLista, urlGuia: String?): Boolean {
-        if (!k.urlGuia.isNullOrBlank() || urlGuia.isNullOrBlank()) return false
-        k.urlGuia = urlGuia
-        return true
-    }
+    /** El canal se lleva la guía de la lista de donde sale (si ya trae una propia, se queda con ella). */
+    private fun conGuia(c: Canal, urlGuia: String?): Canal =
+        if (c.guia.isNullOrBlank() && !urlGuia.isNullOrBlank()) c.copy(guia = urlGuia) else c
 
     /** Copia la lista a Descargas/OptimoPlay/Listas para tenerla fuera de la app. Null si fue bien, o el error. */
     fun exportar(ctx: Context, l: ListaGuardada): String? {
