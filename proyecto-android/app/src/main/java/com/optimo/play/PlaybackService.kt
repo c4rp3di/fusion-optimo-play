@@ -115,6 +115,11 @@ class PlaybackService : Service() {
     private var clienteMega: MegaCliente? = null
     private var megaLan: ServidorMega? = null
     @Volatile private var genMega = 0
+    /** Todos los archivos del enlace de Mega (también los que no son audio ni vídeo), para poder guardarlos. */
+    @Volatile var megaArchivos: List<MegaNodo> = emptyList()
+    /** Nombre de la carpeta de Mega («» si el enlace es un archivo suelto): es la carpeta raíz al guardar. */
+    @Volatile var megaRaiz: String = ""
+    private var megaGuardadoObj: MegaGuardado? = null
     val esMega: Boolean get() = megaOrigen != null
     private val subsExternas = ArrayList<File>()
     @Volatile var archivoTorrentActual: ArchivoTorrent? = null
@@ -275,7 +280,7 @@ class PlaybackService : Service() {
         urlGuiaCabecera = null
         necesitaElegir = false
         archivosTorrent = emptyList()
-        subsExternas.clear()
+        subsExternas.clear(); reiniciarSubsDirecto()
         retardoSubs = 0L
         archivoTorrentActual = null
         fuente = f
@@ -339,7 +344,7 @@ class PlaybackService : Service() {
         urlGuiaCabecera = null
         necesitaElegir = false
         archivosTorrent = emptyList()
-        subsExternas.clear()
+        subsExternas.clear(); reiniciarSubsDirecto()
         retardoSubs = 0L
         archivoTorrentActual = null
         esTorrent = false
@@ -364,7 +369,7 @@ class PlaybackService : Service() {
         fin = false
         estado = ""
         ultimoEvento = ""
-        subsExternas.clear()
+        subsExternas.clear(); reiniciarSubsDirecto()
         retardoSubs = 0L
         crearReproductor()
         reproducir(p.uri, f)
@@ -778,7 +783,7 @@ class PlaybackService : Service() {
         titulo = c.nombre
         claveRep = "" // un directo no tiene posición que recordar
         posReanudar = 0L
-        subsExternas.clear()
+        subsExternas.clear(); reiniciarSubsDirecto()
         retardoSubs = 0L
         if (c.drm) avisoUi = "Este canal usa DRM: puede que no se reproduzca"
         val ua = c.ua ?: lf.ua ?: Utiles.UA_MOVIL
@@ -1001,7 +1006,19 @@ class PlaybackService : Service() {
 
     // ---------------------------------------------------------------- Mega
 
-    private fun cerrarMega() {
+    /** El gestor de guardado de Mega, creado al usarlo por primera vez. */
+    private fun mg(): MegaGuardado = megaGuardadoObj ?: MegaGuardado(
+        this,
+        { main.post { notificar() } },
+        { m: String -> avisoUi = m },
+        { main.post { tomarBloqueos() } },
+        { main.post { alTerminarGuardadoMega() } }
+    ).also { megaGuardadoObj = it }
+
+    private fun cerrarMega(cancelarGuardado: Boolean = true) {
+        if (cancelarGuardado) megaGuardadoObj?.cancelarTodo()
+        megaArchivos = emptyList()
+        megaRaiz = ""
         genMega++
         hiloMega?.interrupt()
         hiloMega = null
@@ -1084,6 +1101,8 @@ class PlaybackService : Service() {
                         }
                         servidorMega = srv
                         clienteMega = cli
+                        megaArchivos = listOf(nodo)
+                        megaRaiz = ""
                         estado = ""
                         titulo = nodo.nombre
                         ajustes.registrar(f.uri, nodo.nombre)
@@ -1110,6 +1129,12 @@ class PlaybackService : Service() {
                         val base = Utiles.sinExtension(it.nombre)
                         Pista(srv.url(it), it.nombre, if (variasRutas && it.ruta.isNotEmpty()) it.ruta + " / " + base else base)
                     }
+                    // Para guardar: todo lo de la carpeta (o de la subcarpeta del enlace), también lo que no se reproduce.
+                    val todos = (if (sub != null && datos.subCarpeta) dir.archivos.filter { it.padres.contains(sub) } else dir.archivos)
+                        .sortedWith { a, b ->
+                            val c = Utiles.comparaNatural(a.ruta, b.ruta)
+                            if (c != 0) c else Utiles.comparaNatural(a.nombre, b.nombre)
+                        }
                     var inicio = 0
                     if (sub != null && !datos.subCarpeta) inicio = lista.indexOfFirst { it.handle == sub }.coerceAtLeast(0)
                     main.post {
@@ -1119,6 +1144,8 @@ class PlaybackService : Service() {
                         }
                         servidorMega = srv
                         clienteMega = cli
+                        megaArchivos = todos
+                        megaRaiz = dir.nombre
                         abrirCola(pistas, inicio, dir.nombre, true)
                     }
                 }
@@ -1231,7 +1258,7 @@ class PlaybackService : Service() {
             claveRep = f.uri + "#" + a.indice
             ajustes.registrar(claveRep, a.nombre)
             posReanudar = ajustes.posicion(claveRep)
-            subsExternas.clear()
+            subsExternas.clear(); reiniciarSubsDirecto()
             crearReproductor()
             reproducir(url, f)
         }
@@ -1484,7 +1511,7 @@ class PlaybackService : Service() {
         }
         // Subtítulos: el último archivo externo cargado, convertido al formato que entiende cada tele.
         var urlSubs: String? = null
-        val fs = archivoSubsActual()
+        val fs = if (subsConRelojPropio) null else archivoSubsActual()
         if (fs != null) {
             val prep = Subs.preparar(fs, retardoSubs / 1000L, d.tipo == Destino.CHROMECAST)
             if (prep != null) urlSubs = srv.urlTexto(prep.bytes, prep.ext, prep.mime)
@@ -1639,6 +1666,7 @@ class PlaybackService : Service() {
         volverALocal(false)
         guardarPos()
         hiloTorrent?.interrupt()
+        megaGuardadoObj?.cancelarTodo()
         motor.cerrar()
         destruirReproductor()
         liberarBloqueos()
@@ -1756,7 +1784,8 @@ class PlaybackService : Service() {
     /** -2 sin marcar, 0 descargando, 1 copiando, 2 guardado, -1 error. */
     fun estadoGuardado(a: ArchivoTorrent): Int = motor.guardado[a.indice] ?: -2
 
-    fun hayGuardadoPendiente(): Boolean = esTorrent && motor.pendientesGuardar() > 0
+    fun hayGuardadoPendiente(): Boolean =
+        (esTorrent && motor.pendientesGuardar() > 0) || (megaGuardadoObj?.pendientes() ?: 0) > 0
 
     /** Espacio libre donde se descarga (la caché de la app). */
     fun espacioLibre(): Long = cacheDir.usableSpace
@@ -1797,6 +1826,7 @@ class PlaybackService : Service() {
 
     /** «2 archivos · 37 %» para la notificación. */
     fun resumenGuardado(): String {
+        if (!esTorrent) return megaGuardadoObj?.resumen() ?: ""
         val g = motor.pendientesGuardar()
         if (g == 0) return ""
         var suma = 0
@@ -1886,14 +1916,161 @@ class PlaybackService : Service() {
         }
     }
 
+    // ---------------------------------------------------------------- guardar archivos de Mega
+
+    /** El archivo de Mega que suena ahora (la dirección local lleva su identificador). */
+    fun megaNodoActual(): MegaNodo? = megaNodoDe(ultimaUrl)
+
+    /** El archivo de Mega al que corresponde una dirección local de este servicio (la de una pista de la cola, p. ej.). */
+    fun megaNodoDe(url: String?): MegaNodo? {
+        if (url == null || megaOrigen == null) return null
+        val h = try { Uri.parse(url).pathSegments.getOrNull(1) } catch (e: Exception) { null } ?: return null
+        return megaArchivos.firstOrNull { it.handle == h }
+    }
+
+    /** ¿Es este el mismo enlace de Mega que ya está abierto (aunque ahora la fuente sea la cola de sus archivos)? */
+    fun esMismoEnlaceMega(uri: String): Boolean = megaOrigen == uri
+
+    /** -2 sin marcar, 0 en cola o bajando, 2 guardado, -1 error. */
+    fun estadoGuardadoMega(n: MegaNodo): Int = megaGuardadoObj?.estadoDe(n.handle) ?: -2
+
+    fun errorGuardadoMega(n: MegaNodo): String? = megaGuardadoObj?.errores?.get(n.handle)
+
+    /** Pone en cola para guardar en Descargas/OptimoPlay. Los que ya estén ahí (misma ruta y tamaño) se omiten. */
+    fun guardarMega(lista: List<MegaNodo>) {
+        val cli = clienteMega ?: run {
+            avisoUi = "Este enlace de Mega ya no está abierto"
+            return
+        }
+        val raiz = megaRaiz
+        Thread {
+            var omitidos = 0
+            val nuevas = ArrayList<MegaGuardado.Tarea>()
+            for (n in lista) {
+                val ruta = MegaGuardado.ruta(raiz, n)
+                if (mg().estadoDe(n.handle) == 2) {
+                    omitidos++
+                } else if (n.tam > 0 && Exportar.yaGuardado(this, ruta, n.tam)) {
+                    mg().marcarGuardado(n.handle)
+                    omitidos++
+                } else {
+                    nuevas.add(MegaGuardado.Tarea(cli, n, ruta))
+                }
+            }
+            main.post {
+                if (omitidos > 0) avisoUi = "Ya estaban guardados (se omiten): " + omitidos
+                if (nuevas.isNotEmpty()) mg().anadir(nuevas)
+                notificar()
+            }
+        }.start()
+    }
+
+    /** Quita de la cola (o corta si se está bajando) esos archivos. */
+    fun cancelarGuardadoMega(lista: List<MegaNodo>) {
+        for (n in lista) megaGuardadoObj?.quitar(n.handle)
+        notificar()
+    }
+
+    fun cancelarTodoGuardadoMega() {
+        megaGuardadoObj?.cancelarTodo()
+        notificar()
+    }
+
+    /** Acabaron los guardados de Mega: si ya no suena nada, el servicio se cierra solo (como con los torrents). */
+    private fun alTerminarGuardadoMega() {
+        if (hayGuardadoPendiente()) return
+        if (emisor != null) {
+            // Se sigue emitiendo.
+        } else if (mp == null) {
+            detener()
+            return
+        } else if (mp?.isPlaying != true) {
+            soltarBloqueos()
+        }
+        if (mp != null) notificar()
+    }
+
     // ---------------------------------------------------------------- subtitulos
 
     /** Último archivo de subtítulos externo/descargado cargado (para sincronizar por líneas). */
     fun archivoSubsActual(): File? = subsExternas.lastOrNull()
 
+    // ---- subtítulos de directos con reloj propio (no ligado al del vídeo: sobreviven a reinicios del reloj del canal)
+
+    @Volatile var cuesDirecto: List<Subs.Cue> = emptyList()
+        private set
+    @Volatile var subsSincronizados = false
+        private set
+    @Volatile var subsPausados = false
+        private set
+    private var anclaSub = 0L
+    private var anclaReal = 0L
+
+    /** En un canal en directo, con subtítulos cargados: se dibujan en la app y siguen un reloj propio. */
+    val subsConRelojPropio: Boolean get() = hayCanales && cuesDirecto.isNotEmpty()
+
+    fun reiniciarSubsDirecto() {
+        cuesDirecto = emptyList()
+        subsSincronizados = false
+        subsPausados = false
+    }
+
+    /** Quita los subtítulos de un directo (los de reloj propio). */
+    fun quitarSubsDirecto() {
+        subsExternas.clear(); reiniciarSubsDirecto()
+        reiniciarSubsDirecto()
+    }
+
+    /** Instante del subtítulo (ms) que corresponde a ahora; -1 si aún no se ha sincronizado. */
+    fun tiempoSubs(): Long {
+        if (!subsSincronizados) return -1L
+        return if (subsPausados) anclaSub else anclaSub + (android.os.SystemClock.elapsedRealtime() - anclaReal)
+    }
+
+    /** «Ahora suena lo que dice el subtítulo que empieza en [msSub]». */
+    fun fijarSubsEnTiempo(msSub: Long) {
+        anclaSub = msSub
+        anclaReal = android.os.SystemClock.elapsedRealtime()
+        subsSincronizados = true
+        subsPausados = false
+    }
+
+    /** Ajuste fino: positivo = subtítulos más tarde (como el desfase de siempre). */
+    fun ajustarSubs(deltaMs: Long) {
+        if (!subsSincronizados) return
+        val t = tiempoSubs()
+        anclaSub = t - deltaMs
+        anclaReal = android.os.SystemClock.elapsedRealtime()
+    }
+
+    /** Congela el reloj de los subtítulos (p. ej. durante un corte de anuncios). */
+    fun pausarSubs() {
+        if (!subsSincronizados || subsPausados) return
+        anclaSub = tiempoSubs()
+        subsPausados = true
+    }
+
+    fun reanudarSubs() {
+        if (!subsSincronizados || !subsPausados) return
+        anclaReal = android.os.SystemClock.elapsedRealtime()
+        subsPausados = false
+    }
+
     fun anadirSubtitulo(f: File) {
         val m = mp ?: return
         subsExternas.add(f)
+        if (hayCanales) {
+            val c = Subs.leerCues(f)
+            if (c.isNotEmpty()) {
+                // Directo: no se pasan a libVLC; los dibuja la app con su propio reloj.
+                cuesDirecto = c
+                subsSincronizados = false
+                subsPausados = false
+                try { m.setSpuTrack(-1) } catch (e: Throwable) { /* nada */ }
+                avisoUi = "Subtítulos cargados (" + c.size + " líneas). Sincronízalos en CC › Sincronizar"
+                return
+            }
+        }
         m.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(f), true)
         // Llegaron subtítulos mientras se emite: se vuelve a mandar el vídeo con ellos, por donde iba.
         val d = destinoEmision
@@ -2136,7 +2313,7 @@ class PlaybackService : Service() {
             return Notification.Action.Builder(Icon.createWithResource(this, icono), texto, pi).build()
         }
 
-        val guardando = if (esTorrent) resumenGuardado() else ""
+        val guardando = resumenGuardado()
         val texto = when {
             emisor != null -> "Emitiendo a " + (destinoEmision?.nombre ?: "la tele")
             error != null -> error!!
