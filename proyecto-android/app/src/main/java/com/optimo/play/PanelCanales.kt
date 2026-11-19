@@ -27,7 +27,7 @@ class PanelCanales(
     private val alCerrar: () -> Unit
 ) {
 
-    private class Item(val cabecera: String?, val canal: Canal?, val indice: Int)
+    private class Item(val cabecera: String?, val canal: Canal?, val indice: Int, val n: Int = 0)
 
     private class Fila(val raiz: LinearLayout, val logo: ImageView, val nombre: TextView, val prog: TextView, val estrella: TextView)
 
@@ -42,6 +42,7 @@ class PanelCanales(
     private var guia: Guia? = null
     private var actual = -1
     private var soloFav = false
+    private val colapsados = HashSet<String>()
     private var items: List<Item> = emptyList()
     private var firma = ""
 
@@ -83,7 +84,8 @@ class PanelCanales(
                     t.maxLines = 1
                     t.ellipsize = TextUtils.TruncateAt.END
                 }
-                tv.text = "📁 " + (it.cabecera ?: "")
+                val cab = it.cabecera ?: ""
+                tv.text = (if (colapsados.contains(cab)) "▶ " else "▼ ") + "📁 " + cab + "  (" + it.n + ")"
                 return tv
             }
             val f = (convertView?.tag as? Fila) ?: crearFila()
@@ -149,6 +151,11 @@ class PanelCanales(
         val tit = texto("Canales", 16f)
         tit.setPadding(px(8), px(4), px(8), px(4))
         cab.addView(tit, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        cab.addView(mini("⇕") {
+            val gs = todos.map { it.grupo }.toSet()
+            if (colapsados.containsAll(gs)) colapsados.clear() else colapsados.addAll(gs)
+            filtrar()
+        })
         btnFav = mini("☆") {
             soloFav = !soloFav
             btnFav.text = if (soloFav) "★" else "☆"
@@ -178,6 +185,12 @@ class PanelCanales(
             if (pos in items.indices) {
                 val it = items[pos]
                 if (it.canal != null) alElegir(it.indice)
+                else if (it.cabecera != null) {
+                    // Pulsar una categoría la pliega o la despliega.
+                    val g: String = it.cabecera
+                    if (!colapsados.remove(g)) colapsados.add(g)
+                    filtrar()
+                }
             }
         }
         vista.addView(lista, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -191,6 +204,7 @@ class PanelCanales(
         guia = g
         actual = indiceActual
         firma = ""
+        if (indiceActual >= 0) todos.getOrNull(indiceActual)?.let { colapsados.remove(it.grupo) }
         filtrar()
         if (indiceActual >= 0) {
             val pos = items.indexOfFirst { it.canal != null && it.indice == indiceActual }
@@ -213,15 +227,24 @@ class PanelCanales(
     private fun filtrar() {
         val q = Guia.norm(buscador.text.toString())
         val varios = todos.map { it.grupo }.distinct().size > 1
-        val res = ArrayList<Item>()
-        var previo: String? = null
+        val validos = ArrayList<Int>()
+        val cuenta = HashMap<String, Int>()
         for ((i, c) in todos.withIndex()) {
             if (soloFav && !favoritos.contains(c.clave)) continue
             if (q.isNotEmpty() && !claves[i].contains(q)) continue
+            validos.add(i)
+            cuenta[c.grupo] = (cuenta[c.grupo] ?: 0) + 1
+        }
+        val res = ArrayList<Item>()
+        var previo: String? = null
+        for (i in validos) {
+            val c = todos[i]
             if (varios && c.grupo != previo) {
-                res.add(Item(c.grupo, null, -1))
+                res.add(Item(c.grupo, null, -1, cuenta[c.grupo] ?: 0))
                 previo = c.grupo
             }
+            // Con una búsqueda activa se enseñan los resultados aunque su categoría esté plegada.
+            if (varios && q.isEmpty() && colapsados.contains(c.grupo)) continue
             res.add(Item(null, c, i))
         }
         items = res
