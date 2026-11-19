@@ -40,6 +40,7 @@ class EditorListaActivity : Activity() {
     private lateinit var vacio: TextView
     private lateinit var lista: ListView
     private lateinit var bCategoria: Button
+    private lateinit var bGuia: Button
 
     private val editable: Boolean get() = info?.esEditable == true
     private val esFav: Boolean get() = id == Biblioteca.ID_FAV
@@ -82,6 +83,10 @@ class EditorListaActivity : Activity() {
             refrescar()
         }
         fila.addView(bPlegar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        bGuia = Button(this)
+        bGuia.text = "Guía"
+        bGuia.setOnClickListener { dialogoGuia() }
+        fila.addView(bGuia, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         raiz.addView(fila)
 
         vacio = TextView(this)
@@ -171,6 +176,7 @@ class EditorListaActivity : Activity() {
         }
         titulo.text = icono + (inf?.nombre ?: "Lista")
         bCategoria.visibility = if (editable) View.VISIBLE else View.GONE
+        bGuia.visibility = if (editable) View.VISIBLE else View.GONE
         val porGrupo = datos.canales.groupBy { it.grupo }
         val res = ArrayList<Fila>()
         for (g in datos.grupos) {
@@ -192,10 +198,25 @@ class EditorListaActivity : Activity() {
     /** Guarda en segundo plano una copia de lo editado; la pantalla ya está al día. */
     private fun guardar() {
         refrescar()
-        val copia = ContenidoLista(ArrayList(datos.grupos), ArrayList(datos.canales))
+        val copia = ContenidoLista(ArrayList(datos.grupos), ArrayList(datos.canales), datos.urlGuia)
         val idLista = id
         val appCtx = applicationContext
         Thread { Biblioteca.guardarContenido(appCtx, idLista, copia) }.start()
+    }
+
+    /** Guía de esta lista: la puesta a mano o, si no hay, la guardada en la propia lista. */
+    private fun guiaEfectiva(): String? {
+        val manual = aj.guiaDe(Biblioteca.uriDe(id))
+        return if (manual.isNotEmpty()) manual else datos.urlGuia
+    }
+
+    private fun dialogoGuia() {
+        pedirNombre("Dirección de la guía (XMLTV)", guiaEfectiva() ?: "") { u ->
+            datos.urlGuia = if (u.startsWith("http", true)) u else null
+            aj.fijarGuia(Biblioteca.uriDe(id), "") // manda la de la lista, no una puesta a mano antes
+            if (u.startsWith("http", true)) guardar()
+            else Toast.makeText(this, "Pon una dirección http o https", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun reproducir() {
@@ -429,7 +450,7 @@ class EditorListaActivity : Activity() {
 
     private fun hacerCopia(dest: ListaGuardada, cs: List<Canal>, grupo: String?) {
         Thread {
-            val n = Biblioteca.anadir(this, dest.id, cs, grupo)
+            val n = Biblioteca.anadir(this, dest.id, cs, grupo, guiaEfectiva())
             runOnUiThread {
                 if (dest.esFavoritos) aj.agregarFavoritos(cs.map { it.clave })
                 val ya = cs.size - n
