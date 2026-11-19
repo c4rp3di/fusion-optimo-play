@@ -16,8 +16,9 @@ import android.widget.TextView
 import android.widget.Toast
 
 /**
- * «Mis listas»: listas M3U/M3U8 guardadas dentro de la app. Se añaden desde una dirección (se descargan y se guardan)
- * o desde un archivo del dispositivo, y se pueden actualizar, renombrar, copiar a Descargas y borrar.
+ * «Mis listas»: gestor de listas. «Favoritos» va siempre la primera; después las listas propias (con categorías
+ * editables) y las M3U/M3U8 descargadas o importadas (con sus categorías originales). Se pueden reordenar, renombrar,
+ * abrir en el gestor de canales, actualizar, copiar a Descargas y borrar.
  */
 class ListasActivity : Activity() {
 
@@ -54,6 +55,11 @@ class ListasActivity : Activity() {
         fila.addView(bArch, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         raiz.addView(fila)
 
+        val bPropia = Button(this)
+        bPropia.text = "＋ Nueva lista propia"
+        bPropia.setOnClickListener { nuevaPropia() }
+        raiz.addView(bPropia, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
         vacio = TextView(this)
         vacio.alpha = 0.7f
         vacio.setPadding(0, dp(16), 0, dp(8))
@@ -76,9 +82,9 @@ class ListasActivity : Activity() {
 
     private fun cargar() {
         listas = Biblioteca.todas(this)
-        vacio.text = if (listas.isEmpty())
-            "Aún no hay listas guardadas. Añade una desde su dirección o desde un archivo .m3u/.m3u8; también puedes guardar la que estés viendo desde ⋮ › «Guardar esta lista en la app»."
-        else "Toca una lista para abrirla. Mantén pulsada para actualizarla, renombrarla, copiarla a Descargas o borrarla."
+        vacio.text = if (listas.size <= 1 && listas.all { it.entradas == 0 })
+            "Añade listas desde una dirección o un archivo .m3u/.m3u8, o crea una propia. Los canales que marques con ☆ aparecen en Favoritos; también puedes guardar la lista que estés viendo desde ⋮ › «Guardar esta lista en la app»."
+        else "Toca una lista para reproducirla. Mantén pulsada para gestionar sus canales y categorías, moverla, renombrarla o borrarla."
         val f = java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.getDefault())
         // simple_list_item_2 necesita dos textos: se hace con un adaptador propio sencillo.
         lista.adapter = object : android.widget.BaseAdapter() {
@@ -88,16 +94,29 @@ class ListasActivity : Activity() {
             override fun getView(position: Int, convertView: android.view.View?, parent: ViewGroup?): android.view.View {
                 val v = convertView ?: layoutInflater.inflate(android.R.layout.simple_list_item_2, parent, false)
                 val l = listas[position]
-                v.findViewById<TextView>(android.R.id.text1).text = l.nombre
+                val icono = when (l.tipo) {
+                    Biblioteca.TIPO_FAVORITOS -> "★ "
+                    Biblioteca.TIPO_PROPIA -> "📝 "
+                    else -> ""
+                }
+                v.findViewById<TextView>(android.R.id.text1).text = icono + l.nombre
                 val origen = if (l.origen.isEmpty()) "de un archivo" else l.origen.substringAfter("://").substringBefore('/')
-                v.findViewById<TextView>(android.R.id.text2).text =
-                    l.entradas.toString() + " entradas  ·  " + origen + "  ·  " + f.format(java.util.Date(l.fecha))
+                v.findViewById<TextView>(android.R.id.text2).text = when (l.tipo) {
+                    Biblioteca.TIPO_FAVORITOS -> l.entradas.toString() + " canales  ·  tus favoritos"
+                    Biblioteca.TIPO_PROPIA -> l.entradas.toString() + " canales  ·  lista propia"
+                    else -> l.entradas.toString() + " entradas  ·  " + origen + "  ·  " + f.format(java.util.Date(l.fecha))
+                }
                 return v
             }
         }
     }
 
     private fun abrir(l: ListaGuardada) {
+        if (l.entradas == 0 && l.esEditable) {
+            // Una lista propia vacía no tiene nada que reproducir: se abre el gestor para llenarla.
+            gestionar(l)
+            return
+        }
         val i = Intent(this, PlayerActivity::class.java)
         i.action = Intent.ACTION_VIEW
         i.data = Uri.parse(Biblioteca.uriDe(l.id))
@@ -108,14 +127,56 @@ class ListasActivity : Activity() {
     private fun menu(l: ListaGuardada) {
         val et = ArrayList<String>()
         val ac = ArrayList<() -> Unit>()
-        et.add("Abrir"); ac.add { abrir(l) }
-        if (l.origen.startsWith("http", true)) {
+        et.add("Reproducir"); ac.add { abrir(l) }
+        et.add("Gestionar canales y categorías"); ac.add { gestionar(l) }
+        if (l.tipo == Biblioteca.TIPO_DESCARGADA && l.origen.startsWith("http", true)) {
             et.add("Actualizar desde su dirección"); ac.add { actualizar(l) }
         }
-        et.add("Renombrar"); ac.add { renombrar(l) }
-        et.add("Guardar copia en " + Exportar.destinoTexto() + "/Listas"); ac.add { exportar(l) }
-        et.add("Borrar"); ac.add { borrar(l) }
+        if (!l.esFavoritos) {
+            et.add("Renombrar"); ac.add { renombrar(l) }
+            val pos = listas.indexOfFirst { it.id == l.id }
+            if (pos > 1) { et.add("Subir"); ac.add { Biblioteca.mover(this, l.id, -1); cargar() } }
+            if (pos in 1 until listas.size - 1) { et.add("Bajar"); ac.add { Biblioteca.mover(this, l.id, 1); cargar() } }
+        }
+        if (l.entradas > 0) {
+            et.add("Guardar copia en " + Exportar.destinoTexto() + "/Listas"); ac.add { exportar(l) }
+        }
+        if (!l.esFavoritos) {
+            et.add("Borrar"); ac.add { borrar(l) }
+        }
         AlertDialog.Builder(this).setTitle(l.nombre).setItems(et.toTypedArray()) { _, i -> ac[i]() }.show()
+    }
+
+    private fun gestionar(l: ListaGuardada) {
+        val i = Intent(this, EditorListaActivity::class.java)
+        i.putExtra("id", l.id)
+        startActivity(i)
+    }
+
+    private fun nuevaPropia() {
+        val e = EditText(this)
+        e.hint = "Nombre de la lista"
+        e.setSingleLine(true)
+        e.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        val caja = LinearLayout(this)
+        caja.setPadding(dp(20), dp(8), dp(20), 0)
+        caja.addView(e, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        AlertDialog.Builder(this)
+            .setTitle("Nueva lista propia")
+            .setView(caja)
+            .setPositiveButton("Crear") { _, _ ->
+                val n = Biblioteca.limpiarNombre(e.text.toString()).ifEmpty { "Mi lista" }
+                Thread {
+                    val nueva = Biblioteca.crearPropia(this, n)
+                    runOnUiThread {
+                        cargar()
+                        if (nueva == null) Toast.makeText(this, "No se pudo crear la lista", Toast.LENGTH_SHORT).show()
+                        else gestionar(nueva)
+                    }
+                }.start()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun dialogoUrl() {
@@ -212,7 +273,7 @@ class ListasActivity : Activity() {
 
     private fun borrar(l: ListaGuardada) {
         AlertDialog.Builder(this)
-            .setMessage("¿Borrar «" + l.nombre + "» de la app?")
+            .setMessage("¿Borrar «" + l.nombre + "» de la app?" + (if (l.tipo == Biblioteca.TIPO_PROPIA) " Es una lista propia: no se puede recuperar." else ""))
             .setPositiveButton("Borrar") { _, _ ->
                 Biblioteca.borrar(this, l.id)
                 cargar()
