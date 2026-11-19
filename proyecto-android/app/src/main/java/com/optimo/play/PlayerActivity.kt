@@ -807,7 +807,8 @@ class PlayerActivity : Activity() {
         val cs = s.canales
         val favs = aj.favoritos
         val appCtx = applicationContext
-        Thread { Biblioteca.adoptarFavoritos(appCtx, cs, favs) }.start()
+        val guia = guiaEfectiva()
+        Thread { Biblioteca.adoptarFavoritos(appCtx, cs, favs, guia) }.start()
         panelCan.vista.visibility = View.VISIBLE
         panelCanAbierto = true
         mostrarCapa()
@@ -818,11 +819,19 @@ class PlayerActivity : Activity() {
         panelCanAbierto = false
     }
 
+    /** Guía de la lista que se está viendo: la puesta a mano o, si no hay, la que anuncia la propia lista. */
+    private fun guiaEfectiva(): String? {
+        val s = svc ?: return null
+        val manual = aj.guiaDe(s.fuente?.uri ?: "")
+        return if (manual.isNotEmpty()) manual else s.guiaDeLaLista()
+    }
+
     private fun alternarFavorito(c: Canal) {
         aj.alternarFavorito(c.clave)
         val marcado = aj.favoritos.contains(c.clave)
         val appCtx = applicationContext
-        Thread { Biblioteca.marcarFavorito(appCtx, c, marcado) }.start()
+        val guia = guiaEfectiva()
+        Thread { Biblioteca.marcarFavorito(appCtx, c, marcado, guia) }.start()
         val s = svc ?: return
         panelCan.actualizar(aj.favoritos, s.guia, s.canalActual)
     }
