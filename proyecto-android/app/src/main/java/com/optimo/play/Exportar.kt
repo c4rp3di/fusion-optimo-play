@@ -66,6 +66,14 @@ object Exportar {
     /** Devuelve null si todo fue bien, o el texto del error. */
     fun aDescargas(ctx: Context, origen: File, ruta: String, cancelado: () -> Boolean): String? {
         if (!origen.exists()) return "No se encuentra el archivo descargado"
+        return aDescargasFlujo(ctx, ruta) { o -> origen.inputStream().use { i -> copiar(i, o, cancelado) } }
+    }
+
+    /**
+     * Crea Descargas/OptimoPlay/[ruta] (sustituyendo uno con el mismo nombre) y deja que [llenar] escriba su contenido.
+     * Si [llenar] falla o se cancela, no queda un archivo a medias. Devuelve null si todo fue bien, o el texto del error.
+     */
+    fun aDescargasFlujo(ctx: Context, ruta: String, llenar: (OutputStream) -> Unit): String? {
         val nombre = ruta.substringAfterLast('/')
         val sub = ruta.substringBeforeLast('/', "")
         return try {
@@ -102,7 +110,7 @@ object Exportar {
                     ?: return "No se pudo crear el archivo en Descargas"
                 try {
                     val salida = res.openOutputStream(uri) ?: throw IOException("No se puede escribir en Descargas")
-                    salida.use { o -> origen.inputStream().use { i -> copiar(i, o, cancelado) } }
+                    salida.use { o -> llenar(o) }
                     val listo = ContentValues()
                     listo.put(MediaStore.MediaColumns.IS_PENDING, 0)
                     res.update(uri, listo, null, null)
@@ -117,7 +125,7 @@ object Exportar {
                 val destino = File(dir, nombre)
                 val tmp = File(dir, "$nombre.parte")
                 try {
-                    tmp.outputStream().use { o -> origen.inputStream().use { i -> copiar(i, o, cancelado) } }
+                    tmp.outputStream().use { o -> llenar(o) }
                     if (destino.exists()) destino.delete()
                     if (!tmp.renameTo(destino)) throw IOException("No se pudo guardar el archivo")
                 } catch (e: Exception) {
