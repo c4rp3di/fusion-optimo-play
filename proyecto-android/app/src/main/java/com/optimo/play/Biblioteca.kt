@@ -20,7 +20,7 @@ class ListaGuardada(
 }
 
 /** Contenido de una lista de canales para editarlo: categorías en orden (también las vacías) y sus canales. */
-class ContenidoLista(val grupos: MutableList<String>, val canales: MutableList<Canal>)
+class ContenidoLista(val grupos: MutableList<String>, val canales: MutableList<Canal>, var urlGuia: String? = null)
 
 /**
  * Listas M3U/M3U8 guardadas dentro de la app para tenerlas sin depender de una URL. El contenido (que puede llevar
@@ -190,7 +190,7 @@ object Biblioteca {
             }
         }
         for (c in canales) if (!grupos.contains(c.grupo)) grupos.add(c.grupo)
-        return ContenidoLista(grupos, canales)
+        return ContenidoLista(grupos, canales, ListaM3u.guiaDeCabecera(texto))
     }
 
     /** Escribe de nuevo una lista (canales + categorías en su orden) y actualiza su contador. */
@@ -199,7 +199,9 @@ object Biblioteca {
         val grupos = ArrayList(c.grupos)
         for (x in c.canales) if (!grupos.contains(x.grupo)) grupos.add(x.grupo)
         val porGrupo = c.canales.groupBy { it.grupo }
-        val sb = StringBuilder("#EXTM3U\n")
+        val sb = StringBuilder("#EXTM3U")
+        if (!c.urlGuia.isNullOrBlank()) sb.append(" url-tvg=\"").append(limpiarNombre(c.urlGuia!!)).append('"')
+        sb.append('\n')
         for (g in grupos) {
             sb.append(DIRECTIVA).append(g).append('\n')
             for (x in porGrupo[g] ?: emptyList()) {
@@ -224,8 +226,9 @@ object Biblioteca {
 
     /** Copia canales a una lista editable (sin duplicar). [grupo] null = cada uno conserva su categoría. Devuelve cuántos entraron. */
     @Synchronized
-    fun anadir(ctx: Context, id: String, nuevos: List<Canal>, grupo: String?): Int {
+    fun anadir(ctx: Context, id: String, nuevos: List<Canal>, grupo: String?, urlGuia: String? = null): Int {
         val k = contenido(ctx, id)
+        val guiaNueva = adoptarGuia(k, urlGuia)
         val tiene = k.canales.map { it.clave }.toHashSet()
         var n = 0
         for (c in nuevos) {
@@ -235,16 +238,17 @@ object Biblioteca {
             if (!k.grupos.contains(d.grupo)) k.grupos.add(d.grupo)
             n++
         }
-        if (n > 0) guardarContenido(ctx, id, k)
+        if (n > 0 || guiaNueva) guardarContenido(ctx, id, k)
         return n
     }
 
     /** Pone o quita un canal en la lista «Favoritos» (con todos sus datos, para poder abrirlo desde ahí). */
     @Synchronized
-    fun marcarFavorito(ctx: Context, c: Canal, activo: Boolean) {
+    fun marcarFavorito(ctx: Context, c: Canal, activo: Boolean, urlGuia: String? = null) {
         val k = contenido(ctx, ID_FAV)
         val i = k.canales.indexOfFirst { it.clave == c.clave }
         if (activo && i < 0) {
+            adoptarGuia(k, urlGuia)
             k.canales.add(c)
             if (!k.grupos.contains(c.grupo)) k.grupos.add(c.grupo)
             guardarContenido(ctx, ID_FAV, k)
@@ -256,19 +260,29 @@ object Biblioteca {
 
     /** Los favoritos marcados antes de existir la lista (solo se guardaba su clave) pasan a ella cuando se ven en su lista. */
     @Synchronized
-    fun adoptarFavoritos(ctx: Context, canales: List<Canal>, favs: Set<String>) {
+    fun adoptarFavoritos(ctx: Context, canales: List<Canal>, favs: Set<String>, urlGuia: String? = null) {
         if (favs.isEmpty()) return
         val k = contenido(ctx, ID_FAV)
         val tiene = k.canales.map { it.clave }.toHashSet()
         var cambio = false
+        var hay = false
         for (c in canales) {
             if (favs.contains(c.clave) && tiene.add(c.clave)) {
                 k.canales.add(c)
                 if (!k.grupos.contains(c.grupo)) k.grupos.add(c.grupo)
                 cambio = true
+                hay = true
             }
         }
+        if (hay && adoptarGuia(k, urlGuia)) cambio = true
         if (cambio) guardarContenido(ctx, ID_FAV, k)
+    }
+
+    /** Una lista solo tiene una guía: si aún no tiene y los canales nuevos vienen con una, se queda con esa. */
+    private fun adoptarGuia(k: ContenidoLista, urlGuia: String?): Boolean {
+        if (!k.urlGuia.isNullOrBlank() || urlGuia.isNullOrBlank()) return false
+        k.urlGuia = urlGuia
+        return true
     }
 
     /** Copia la lista a Descargas/OptimoPlay/Listas para tenerla fuera de la app. Null si fue bien, o el error. */
