@@ -20,15 +20,31 @@ class Programa(val inicio: Long, val fin: Long, val titulo: String, val desc: St
  * Guía de programación XMLTV (.xml o .xml.gz). Solo se guarda lo cercano al momento actual (de hace 3 h a 36 h
  * vista) para no llenar la memoria. El canal se enlaza por tvg-id y, si no lo hay o no coincide, por nombre.
  */
-class Guia(private val porId: Map<String, List<Programa>>, private val idDeNombre: Map<String, String>) {
+/**
+ * Programación de una guía XMLTV. [otras] son guías adicionales por dirección: un canal que lleva la suya propia
+ * (p. ej. un favorito de otra lista) se busca en ella y no en la principal.
+ */
+class Guia(
+    private val porId: Map<String, List<Programa>>,
+    private val idDeNombre: Map<String, String>,
+    private val otras: Map<String, Guia> = emptyMap()
+) {
 
-    val canalesConProgramas: Int get() = porId.size
+    fun conOtras(o: Map<String, Guia>): Guia = Guia(porId, idDeNombre, o)
+
+    val canalesConProgramas: Int get() = porId.size + otras.values.sumOf { it.canalesConProgramas }
 
     private val cache = HashMap<String, List<Programa>>()
 
     @Synchronized
     fun de(c: Canal): List<Programa> {
         cache[c.clave]?.let { return it }
+        val propia = c.guia?.let { otras[it] }
+        if (propia != null) {
+            val r = propia.de(c)
+            cache[c.clave] = r
+            return r
+        }
         var id = c.tvgId?.lowercase()?.takeIf { porId.containsKey(it) }
         if (id == null) id = idDeNombre[norm(c.nombre)]
         if (id == null) id = idDeNombre[norm(c.etiqueta)]
