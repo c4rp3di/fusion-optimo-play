@@ -13,7 +13,7 @@ import android.widget.TextView
 import android.widget.Toast
 
 /**
- * «Descargas»: lo que se ha guardado de torrents en Descargas/OptimoPlay. Se ve por carpetas, se reproduce, se borra
+ * «Descargas»: lo que se ha guardado de torrents y de enlaces de Mega en Descargas/OptimoPlay. Se ve por carpetas, se reproduce, se borra
  * (archivo o carpeta entera) y se pueden quitar las copias sobrantes «nombre (1).ext» que dejaban versiones anteriores.
  */
 class DescargasActivity : Activity() {
@@ -37,7 +37,7 @@ class DescargasActivity : Activity() {
         raiz.setPadding(dp(16), dp(28), dp(16), dp(8))
 
         val t = TextView(this)
-        t.text = "Descargas de torrents"
+        t.text = "Descargas"
         t.textSize = 24f
         raiz.addView(t)
 
