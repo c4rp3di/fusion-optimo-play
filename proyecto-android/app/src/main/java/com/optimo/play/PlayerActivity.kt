@@ -30,7 +30,12 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.inputmethod.InputMethodManager
+import android.widget.AbsListView
 import android.widget.ArrayAdapter
+import android.widget.BaseAdapter
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -132,6 +137,13 @@ class PlayerActivity : Activity() {
         override fun run() {
             actualizar()
             h.postDelayed(this, 400)
+        }
+    }
+    /** Cada 150 ms: pone el subtítulo propio de un directo y mueve la columna de líneas. */
+    private val ticSubs = object : Runnable {
+        override fun run() {
+            try { pintarSubsDirecto() } catch (e: Throwable) { /* nada: no debe tumbar la pantalla */ }
+            h.postDelayed(this, 150)
         }
     }
     private val quitarIndicador = Runnable { indicador.visibility = View.GONE }
@@ -306,7 +318,7 @@ class PlayerActivity : Activity() {
     /** Abre una fuente nueva; si hay archivos guardándose de un torrent, pregunta antes de cancelarlos. */
     private fun abrirConfirmando(s: PlaybackService, p: Fuente) {
         if (s.hayGuardadoPendiente()) {
-            if (s.fuente?.uri == p.uri) return
+            if (s.fuente?.uri == p.uri || s.esMismoEnlaceMega(p.uri)) return
             AlertDialog.Builder(this)
                 .setTitle("Hay archivos guardándose")
                 .setMessage("Se están descargando para guardarlos en el dispositivo (" + s.resumenGuardado() +
@@ -356,10 +368,12 @@ class PlayerActivity : Activity() {
         aplicarOrientacion()
         inmersivo()
         h.post(tic)
+        h.post(ticSubs)
     }
 
     override fun onStop() {
         h.removeCallbacks(tic)
+        h.removeCallbacks(ticSubs)
         if (!isInPictureInPictureMode) {
             try { adjunto?.detachViews() } catch (e: Throwable) { /* nada */ }
             adjunto = null
@@ -546,6 +560,7 @@ class PlayerActivity : Activity() {
         lpStats.leftMargin = dp(40)
         raiz.addView(panelStats, lpStats)
 
+        construirSubOverlay()
         construirSync()
         construirPanel()
         construirPanelCanales()
@@ -682,6 +697,17 @@ class PlayerActivity : Activity() {
         if (i > 0) { etiquetas.add("Subir"); acciones.add { s.moverEnCola(i, -1) } }
         if (i < s.cola.size - 1) { etiquetas.add("Bajar"); acciones.add { s.moverEnCola(i, 1) } }
         etiquetas.add("Quitar de la cola"); acciones.add { s.quitarDeCola(i) }
+        val nodoMega = s.megaNodoDe(p.uri)
+        if (nodoMega != null) {
+            etiquetas.add(
+                when (s.estadoGuardadoMega(nodoMega)) {
+                    0 -> "Cancelar el guardado de este archivo"
+                    2 -> "Este archivo ya está guardado ✓"
+                    else -> "Guardar este archivo en el dispositivo"
+                }
+            )
+            acciones.add { pedirGuardarMega(listOf(nodoMega)) }
+        }
         lista(p.titulo, etiquetas) { acciones[it]() }
     }
 
@@ -1000,6 +1026,324 @@ class PlayerActivity : Activity() {
         }
     }
 
+    // ---------------------------------------------------------------- subtítulos de directos con reloj propio
+
+    private lateinit var subOverlay: TextView
+    private var claveEstiloSub = ""
+    private lateinit var panelLineas: LinearLayout
+    private lateinit var lineasTv: TextView
+    private lateinit var lineasBusca: EditText
+    private lateinit var lineasLista: ListView
+    private lateinit var lineasPausa: TextView
+    private var lineasFiltro: List<Subs.Cue> = emptyList()
+    private var lineasSeguir = true
+    private var cueActual: Subs.Cue? = null
+    private var ultimoSeguido = -2
+    private var lineasConstruido = false
+
+    /** Inglés si el audio del canal es inglés; español si es otro idioma conocido; si no se sabe, el idioma de Ajustes. */
+    private fun idiomaSugerido(s: PlaybackService): String {
+        try {
+            val m = s.mp ?: return aj.subIdioma
+            val id = m.audioTrack
+            val nombre = m.audioTracks?.firstOrNull { it.id == id }?.name ?: return aj.subIdioma
+            if (Utiles.coincideIdioma(nombre, "en")) return "en"
+            for (c in listOf("es", "fr", "de", "it", "pt", "ja", "ko")) {
+                if (Utiles.coincideIdioma(nombre, c)) return "es"
+            }
+        } catch (e: Throwable) {
+            // Sin pistas de audio todavía.
+        }
+        return aj.subIdioma
+    }
+
+    private fun construirSubOverlay() {
+        subOverlay = TextView(this)
+        subOverlay.gravity = Gravity.CENTER
+        subOverlay.visibility = View.GONE
+        subOverlay.setPadding(dp(8), dp(2), dp(8), dp(2))
+        val lp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
+        lp.bottomMargin = dp(40) + aj.subElevar
+        lp.leftMargin = dp(32)
+        lp.rightMargin = dp(32)
+        raiz.addView(subOverlay, lp)
+    }
+
+    private fun estiloSubOverlay() {
+        val clave = "" + aj.subTamano + "|" + aj.subColor + "|" + aj.subFondo + "|" + aj.subContorno + "|" + aj.subNegrita + "|" + aj.subElevar
+        if (clave == claveEstiloSub) return
+        claveEstiloSub = clave
+        subOverlay.textSize = 18f * aj.subTamano.coerceIn(50, 250) / 100f
+        subOverlay.setTextColor(0xFF000000.toInt() or aj.subColor)
+        subOverlay.setBackgroundColor((aj.subFondo.coerceIn(0, 100) * 255 / 100) shl 24)
+        subOverlay.typeface = if (aj.subNegrita) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+        if (aj.subContorno > 0) subOverlay.setShadowLayer(aj.subContorno * 1.5f, 0f, 0f, Color.BLACK)
+        else subOverlay.setShadowLayer(0f, 0f, 0f, 0)
+        val lp = subOverlay.layoutParams as FrameLayout.LayoutParams
+        lp.bottomMargin = dp(40) + aj.subElevar
+        subOverlay.layoutParams = lp
+    }
+
+    /** Índice del último subtítulo que empieza en o antes de [t] (búsqueda binaria), -1 si ninguno. */
+    private fun indiceCue(cues: List<Subs.Cue>, t: Long): Int {
+        var lo = 0
+        var hi = cues.size - 1
+        var idx = -1
+        while (lo <= hi) {
+            val mid = (lo + hi) / 2
+            if (cues[mid].ini <= t) {
+                idx = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        return idx
+    }
+
+    private fun pintarSubsDirecto() {
+        val s = svc
+        if (s == null || !s.subsConRelojPropio) {
+            if (subOverlay.visibility != View.GONE) subOverlay.visibility = View.GONE
+            if (lineasConstruido && panelLineas.visibility != View.GONE) panelLineas.visibility = View.GONE
+            return
+        }
+        val cues = s.cuesDirecto
+        val t = s.tiempoSubs()
+        var actual: Subs.Cue? = null
+        if (t >= 0L) {
+            estiloSubOverlay()
+            val idx = indiceCue(cues, t)
+            val sb = StringBuilder()
+            var k = idx
+            var n = 0
+            val activas = ArrayList<Subs.Cue>()
+            while (k >= 0 && n < 4) {
+                if (cues[k].fin > t) activas.add(0, cues[k])
+                k--
+                n++
+            }
+            for (c in activas) {
+                if (sb.isNotEmpty()) sb.append('\n')
+                sb.append(c.texto)
+            }
+            actual = if (idx >= 0) cues[idx] else null
+            if (sb.isEmpty()) {
+                if (subOverlay.visibility != View.GONE) subOverlay.visibility = View.GONE
+            } else {
+                if (subOverlay.text.toString() != sb.toString()) subOverlay.text = sb.toString()
+                if (subOverlay.visibility != View.VISIBLE) subOverlay.visibility = View.VISIBLE
+            }
+        } else if (subOverlay.visibility != View.GONE) {
+            subOverlay.visibility = View.GONE
+        }
+        if (!lineasConstruido || panelLineas.visibility != View.VISIBLE) return
+        lineasTv.text = when {
+            t < 0L -> "Sin sincronizar: toca la frase que estás oyendo"
+            s.subsPausados -> "⏸ Subtítulos en pausa (anuncio)"
+            else -> "Subtítulos en marcha · reloj propio"
+        }
+        lineasPausa.text = if (s.subsPausados) "▶ Reanudar" else "⏸ Anuncio"
+        if (actual !== cueActual) {
+            cueActual = actual
+            (lineasLista.adapter as BaseAdapter).notifyDataSetChanged()
+        }
+        if (lineasSeguir && lineasBusca.text.isNullOrEmpty() && actual != null) {
+            val pos = lineasFiltro.indexOf(actual)
+            if (pos >= 0 && pos != ultimoSeguido) {
+                ultimoSeguido = pos
+                lineasLista.setSelectionFromTop(pos, dp(70))
+            }
+        }
+    }
+
+    private fun construirLineas() {
+        lineasConstruido = true
+        panelLineas = LinearLayout(this)
+        panelLineas.orientation = LinearLayout.VERTICAL
+        panelLineas.setBackgroundColor(0x99000000.toInt())
+        panelLineas.setPadding(dp(6), dp(4), dp(6), dp(4))
+        panelLineas.isClickable = true
+        panelLineas.visibility = View.GONE
+
+        lineasTv = texto("", 12f)
+        lineasTv.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+
+        fun fila(vararg items: View): LinearLayout {
+            val f = LinearLayout(this)
+            f.orientation = LinearLayout.HORIZONTAL
+            f.gravity = Gravity.CENTER
+            for (v in items) {
+                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                lp.setMargins(dp(2), dp(1), dp(2), dp(1))
+                f.addView(v, lp)
+            }
+            return f
+        }
+
+        val cabecera = LinearLayout(this)
+        cabecera.orientation = LinearLayout.HORIZONTAL
+        cabecera.gravity = Gravity.CENTER_VERTICAL
+        cabecera.addView(lineasTv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        cabecera.addView(miniBoton("✕") { panelLineas.visibility = View.GONE })
+        panelLineas.addView(cabecera)
+
+        panelLineas.addView(
+            fila(
+                miniBoton("−500") { svc?.ajustarSubs(-500L) },
+                miniBoton("−100") { svc?.ajustarSubs(-100L) },
+                miniBoton("+100") { svc?.ajustarSubs(100L) },
+                miniBoton("+500") { svc?.ajustarSubs(500L) }
+            )
+        )
+        lineasPausa = miniBoton("⏸ Anuncio") {
+            val s = svc
+            if (s != null) { if (s.subsPausados) s.reanudarSubs() else s.pausarSubs() }
+        }
+        panelLineas.addView(
+            fila(
+                lineasPausa,
+                miniBoton("⦿ Seguir") {
+                    lineasSeguir = true
+                    ultimoSeguido = -2
+                }
+            )
+        )
+
+        lineasBusca = EditText(this)
+        lineasBusca.hint = "Buscar frase…"
+        lineasBusca.setHintTextColor(0x99FFFFFF.toInt())
+        lineasBusca.setTextColor(Color.WHITE)
+        lineasBusca.textSize = 14f
+        lineasBusca.setSingleLine(true)
+        lineasBusca.setBackgroundColor(0x33FFFFFF)
+        lineasBusca.setPadding(dp(8), dp(6), dp(8), dp(6))
+        lineasBusca.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: Editable?) {
+                val todas = svc?.cuesDirecto ?: emptyList()
+                val q = (e?.toString() ?: "").trim().lowercase()
+                lineasFiltro = if (q.isEmpty()) todas else todas.filter { it.texto.lowercase().contains(q) }
+                if (q.isNotEmpty()) lineasSeguir = false
+                ultimoSeguido = -2
+                (lineasLista.adapter as BaseAdapter).notifyDataSetChanged()
+                if (q.isNotEmpty()) lineasLista.setSelection(0)
+            }
+        })
+        panelLineas.addView(lineasBusca, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        lineasLista = ListView(this)
+        lineasLista.divider = null
+        lineasLista.isFastScrollEnabled = true
+        lineasLista.adapter = object : BaseAdapter() {
+            override fun getCount(): Int = lineasFiltro.size
+            override fun getItem(i: Int): Any = lineasFiltro[i]
+            override fun getItemId(i: Int): Long = i.toLong()
+            override fun getView(i: Int, v: View?, p: ViewGroup?): View {
+                val tv = (v as? TextView) ?: TextView(this@PlayerActivity)
+                val c = lineasFiltro[i]
+                tv.text = Utiles.fmt(c.ini) + "  " + c.texto
+                tv.textSize = 13f
+                tv.setTextColor(Color.WHITE)
+                tv.setPadding(dp(8), dp(6), dp(8), dp(6))
+                tv.setBackgroundColor(if (c === cueActual) 0x6600A5A5 else 0)
+                return tv
+            }
+        }
+        lineasLista.setOnScrollListener(object : AbsListView.OnScrollListener {
+            override fun onScrollStateChanged(view: AbsListView?, st: Int) {
+                if (st == AbsListView.OnScrollListener.SCROLL_STATE_TOUCH_SCROLL) lineasSeguir = false
+            }
+            override fun onScroll(view: AbsListView?, a: Int, b: Int, c: Int) {}
+        })
+        lineasLista.setOnItemClickListener { _, _, pos, _ ->
+            val c = lineasFiltro.getOrNull(pos)
+            if (c != null) {
+                // Se toca la frase justo después de oírla: unos 400 ms de reacción.
+                svc?.fijarSubsEnTiempo(c.ini + 400L)
+                lineasSeguir = true
+                ultimoSeguido = -2
+                try {
+                    (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(lineasBusca.windowToken, 0)
+                } catch (e: Throwable) { /* nada */ }
+                lineasBusca.setText("")
+                lineasBusca.clearFocus()
+                aviso("Subtítulos sincronizados")
+            }
+        }
+        panelLineas.addView(lineasLista, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val ancho = minOf(dp(360), (resources.displayMetrics.widthPixels * 0.7f).toInt())
+        val lp = FrameLayout.LayoutParams(ancho, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END)
+        lp.topMargin = dp(60)
+        lp.bottomMargin = dp(110)
+        raiz.addView(panelLineas, lp)
+    }
+
+    private fun abrirLineas() {
+        val s = svc ?: return
+        if (!lineasConstruido) construirLineas()
+        lineasBusca.setText("")
+        lineasFiltro = s.cuesDirecto
+        cueActual = null
+        ultimoSeguido = -2
+        lineasSeguir = true
+        (lineasLista.adapter as BaseAdapter).notifyDataSetChanged()
+        panelLineas.visibility = View.VISIBLE
+        barraSync.visibility = View.GONE
+    }
+
+    /** Pone en cola para guardar en el dispositivo archivos de un enlace de Mega (o quita la marca si ya estaba en cola). */
+    private fun pedirGuardarMega(lista: List<MegaNodo>) {
+        val s = svc ?: return
+        if (lista.size == 1) {
+            val n = lista[0]
+            when (s.estadoGuardadoMega(n)) {
+                0 -> {
+                    s.cancelarGuardadoMega(lista)
+                    aviso("Guardado cancelado")
+                    return
+                }
+                2 -> {
+                    aviso("Ya está guardado en " + Exportar.destinoTexto())
+                    return
+                }
+                -1 -> aviso("Error: " + (s.errorGuardadoMega(n) ?: "desconocido") + " · reintentando")
+            }
+        }
+        val nuevos = lista.filter { val e = s.estadoGuardadoMega(it); e == -2 || e == -1 }
+        if (nuevos.isEmpty()) {
+            aviso("Ya marcados")
+            return
+        }
+        val bytes = nuevos.sumOf { it.tam }
+        val libre = s.espacioLibre()
+        val hacer = { s.guardarMega(nuevos); aviso("Guardando " + nuevos.size + " archivo(s)…") }
+        if (libre < bytes + 200L * 1024 * 1024) {
+            AlertDialog.Builder(this)
+                .setTitle("Poco espacio libre")
+                .setMessage(
+                    "Guardar " + nuevos.size + " archivo(s) ocupa " + Utiles.tam(bytes) + " y ahora hay " + Utiles.tam(libre) + " libres."
+                )
+                .setPositiveButton("Intentar igualmente") { _, _ -> hacer() }
+                .setNegativeButton("Cancelar", null)
+                .show()
+        } else if (nuevos.size > 1) {
+            AlertDialog.Builder(this)
+                .setTitle("Guardar en el dispositivo")
+                .setMessage(
+                    nuevos.size.toString() + " archivos (" + Utiles.tam(bytes) + ") irán a " + Exportar.destinoTexto() +
+                        ", con las mismas carpetas de Mega. Cuentan para el límite de transferencia de Mega."
+                )
+                .setPositiveButton("Guardar") { _, _ -> hacer() }
+                .setNegativeButton("Cancelar", null)
+                .show()
+        } else {
+            hacer()
+        }
+    }
+
     // ---------------------------------------------------------------- sincronización de subtítulos
 
     private fun miniBoton(t: String, alPulsar: () -> Unit): TextView {
@@ -1062,6 +1406,10 @@ class PlayerActivity : Activity() {
 
     private fun abrirSync() {
         val s = svc ?: return
+        if (s.hayCanales && s.cuesDirecto.isNotEmpty()) {
+            abrirLineas()
+            return
+        }
         val f = s.archivoSubsActual()
         cuesSync = if (f != null) Utiles.tiemposSubs(f) else emptyList()
         cueObjetivo = -1L
@@ -1216,6 +1564,9 @@ class PlayerActivity : Activity() {
             val st = s.motor.estadisticasDetalle(if (len2 > 0) t2.toDouble() / len2 else 0.0, len2)
             panelStats.text = st
             panelStats.visibility = if (st.isEmpty()) View.GONE else View.VISIBLE
+        } else if (s.esMega && s.hayGuardadoPendiente()) {
+            panelStats.text = "⬇ Guardando en el dispositivo: " + s.resumenGuardado()
+            panelStats.visibility = View.VISIBLE
         } else {
             panelStats.visibility = View.GONE
         }
@@ -1553,6 +1904,36 @@ class PlayerActivity : Activity() {
                 etiquetas.add("Guardar todo el torrent"); acciones.add { pedirGuardar(s.archivosTorrent) }
             }
         }
+        if (s.esMega && s.megaArchivos.isNotEmpty()) {
+            val actualMega = s.megaNodoActual()
+            if (actualMega != null) {
+                etiquetas.add(
+                    when (s.estadoGuardadoMega(actualMega)) {
+                        0 -> "Cancelar el guardado de este archivo"
+                        2 -> "Este archivo ya está guardado ✓"
+                        else -> "Guardar este archivo en el dispositivo"
+                    }
+                )
+                acciones.add { pedirGuardarMega(listOf(actualMega)) }
+            }
+            if (s.megaArchivos.size > 1) {
+                etiquetas.add("Guardar toda la carpeta de Mega (" + s.megaArchivos.size + " archivos)")
+                acciones.add { pedirGuardarMega(s.megaArchivos) }
+            }
+            if (s.hayGuardadoPendiente()) {
+                etiquetas.add("Cancelar los guardados (" + s.resumenGuardado() + ")")
+                acciones.add {
+                    AlertDialog.Builder(this)
+                        .setMessage("¿Cancelar lo que se está guardando? Lo que ya esté en Descargas se queda.")
+                        .setPositiveButton("Cancelar guardados") { _, _ ->
+                            s.cancelarTodoGuardadoMega()
+                            aviso("Guardados cancelados")
+                        }
+                        .setNegativeButton("Seguir", null)
+                        .show()
+                }
+            }
+        }
         if (Build.VERSION.SDK_INT >= 26) {
             etiquetas.add("Imagen en imagen"); acciones.add { entrarPip() }
         }
@@ -1686,6 +2067,7 @@ class PlayerActivity : Activity() {
         etiquetas.add("Cargar archivo de subtítulos…"); acciones.add { elegirArchivoSubs() }
         etiquetas.add("Buscar en OpenSubtitles…"); acciones.add { buscarOnline() }
         etiquetas.add("Sincronizar / desfase…"); acciones.add { abrirSync() }
+        if (s.subsConRelojPropio) { etiquetas.add("Quitar subtítulos del directo"); acciones.add { s.quitarSubsDirecto(); if (lineasConstruido) panelLineas.visibility = View.GONE } }
         etiquetas.add("Estilo (tamaño, color, fondo…)"); acciones.add {
             DialogoSubs.estilo(this, aj) {
                 aviso("Aplicando estilo…")
@@ -1764,7 +2146,7 @@ class PlayerActivity : Activity() {
         campo.setSingleLine(true)
         val idioma = EditText(this)
         idioma.hint = "Idioma (es, en…)"
-        idioma.setText(aj.subIdioma)
+        idioma.setText(idiomaSugerido(s))
         idioma.setSingleLine(true)
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
