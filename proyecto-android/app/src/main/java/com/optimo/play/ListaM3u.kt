@@ -17,7 +17,9 @@ data class Canal(
     val tvgId: String?,
     val referer: String?,
     val ua: String?,
-    val drm: Boolean
+    val drm: Boolean,
+    /** Guía (XMLTV) propia de este canal: la de la lista de donde vino. Null = la de la lista que lo contiene. */
+    val guia: String? = null
 ) {
     /** «100  LG 1»: lo que se enseña en las listas. */
     val etiqueta: String get() = if (numero > 0) "$numero  $nombre" else nombre
@@ -40,6 +42,7 @@ class ListaM3u(val canales: List<Canal>, val urlGuia: String?) {
         var referer: String? = null
         var ua: String? = null
         var drm = false
+        var guia: String? = null
     }
 
     companion object {
@@ -132,6 +135,7 @@ class ListaM3u(val canales: List<Canal>, val urlGuia: String?) {
             p.logo = a["tvg-logo"]?.takeIf { it.isNotBlank() }
             p.grupo = a["group-title"]?.takeIf { it.isNotBlank() }
             p.id = a["tvg-id"]?.takeIf { it.isNotBlank() }
+            p.guia = a["x-guia"]?.trim()?.takeIf { it.startsWith("http", true) }
             p.numero = (a["tvg-chno"] ?: a["channel-number"])?.trim()?.toIntOrNull() ?: 0
             return p
         }
@@ -187,7 +191,7 @@ class ListaM3u(val canales: List<Canal>, val urlGuia: String?) {
                 }
                 val nombre = if (p.nombre.isNotEmpty()) p.nombre else url.substringBefore('?').substringAfterLast('/').take(40)
                 crudos.add(
-                    Canal(p.numero, if (nombre.isEmpty()) "Canal" else nombre, url, p.logo, p.grupo ?: "Canales", p.id, p.referer, p.ua, p.drm)
+                    Canal(p.numero, if (nombre.isEmpty()) "Canal" else nombre, url, p.logo, p.grupo ?: "Canales", p.id, p.referer, p.ua, p.drm, p.guia)
                 )
                 pend = null
             }
