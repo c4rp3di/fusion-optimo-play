@@ -257,6 +257,16 @@ class Ajustes(ctx: Context) {
         sp.edit().putStringSet("favs", f).apply()
     }
 
+    fun agregarFavoritos(claves: Collection<String>) {
+        val f = HashSet(favoritos)
+        if (f.addAll(claves)) sp.edit().putStringSet("favs", f).apply()
+    }
+
+    fun quitarFavoritos(claves: Collection<String>) {
+        val f = HashSet(favoritos)
+        if (f.removeAll(claves.toSet())) sp.edit().putStringSet("favs", f).apply()
+    }
+
     /** URL de la guía (XMLTV) puesta a mano para una lista. Vacío = la que indique la propia lista. */
     fun guiaDe(lista: String): String = leerSeguro("guia_" + Integer.toHexString(lista.hashCode()))
 
