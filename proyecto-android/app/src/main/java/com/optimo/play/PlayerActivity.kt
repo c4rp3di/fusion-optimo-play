@@ -804,6 +804,10 @@ class PlayerActivity : Activity() {
         val s = svc ?: return
         if (!s.hayCanales) return
         panelCan.cargar(s.canales, aj.favoritos, s.guia, s.canalActual)
+        val cs = s.canales
+        val favs = aj.favoritos
+        val appCtx = applicationContext
+        Thread { Biblioteca.adoptarFavoritos(appCtx, cs, favs) }.start()
         panelCan.vista.visibility = View.VISIBLE
         panelCanAbierto = true
         mostrarCapa()
@@ -816,6 +820,9 @@ class PlayerActivity : Activity() {
 
     private fun alternarFavorito(c: Canal) {
         aj.alternarFavorito(c.clave)
+        val marcado = aj.favoritos.contains(c.clave)
+        val appCtx = applicationContext
+        Thread { Biblioteca.marcarFavorito(appCtx, c, marcado) }.start()
         val s = svc ?: return
         panelCan.actualizar(aj.favoritos, s.guia, s.canalActual)
     }
