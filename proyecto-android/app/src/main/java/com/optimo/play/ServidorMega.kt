@@ -6,13 +6,9 @@ import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.URL
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 /**
  * Servidor HTTP mínimo en 127.0.0.1 que le sirve a libVLC los archivos de Mega ya descifrados.
@@ -216,70 +212,9 @@ class ServidorMega(
         }
     }
 
-    /** Abre la descarga de Mega del rango [desde, hasta] (ambos incluidos). Renueva la dirección si ha caducado. */
-    private fun conectar(n: MegaNodo, desde: Long, hasta: Long): HttpURLConnection {
-        var url = cli.urlDescarga(n, false)
-        var renovada = false
-        while (true) {
-            val con = URL("$url/$desde-$hasta").openConnection() as HttpURLConnection
-            con.connectTimeout = 15000
-            con.readTimeout = 30000
-            con.setRequestProperty("User-Agent", "Mozilla/5.0")
-            val codigo = try { con.responseCode } catch (e: Exception) { con.disconnect(); throw e }
-            if (codigo in 200..299) return con
-            val espera = con.getHeaderField("X-MEGA-Time-Left")?.toLongOrNull()
-            con.disconnect()
-            when {
-                codigo == 509 || codigo == 429 -> {
-                    val extra = if (espera != null && espera > 0) " Vuelve a intentarlo en " + maxOf(1L, espera / 60) + " min." else ""
-                    throw MegaException(
-                        MegaException.CUOTA,
-                        "Se ha superado el límite de transferencia de Mega.$extra Prueba más tarde o con otra conexión."
-                    )
-                }
-                (codigo == 403 || codigo == 404 || codigo == 410) && !renovada -> {
-                    renovada = true
-                    url = cli.urlDescarga(n, true)
-                }
-                else -> throw MegaException(MegaException.GENERAL, "Mega respondió HTTP $codigo al descargar")
-            }
-        }
-    }
+    private fun conectar(n: MegaNodo, desde: Long, hasta: Long): HttpURLConnection = MegaFlujo.conectar(cli, n, desde, hasta)
 
     private fun enviar(sal: BufferedOutputStream, con: HttpURLConnection, n: MegaNodo, ini: Long, bloque: Long, fin: Long) {
-        // El contador de AES-CTR de Mega: 8 bytes de nonce y 8 bytes con el nº de bloque de 16 bytes (big-endian).
-        val iv = ByteArray(16)
-        System.arraycopy(n.nonce, 0, iv, 0, 8)
-        var b = bloque / 16
-        for (i in 15 downTo 8) {
-            iv[i] = (b and 0xFF).toByte()
-            b = b ushr 8
-        }
-        val cifra = Cipher.getInstance("AES/CTR/NoPadding")
-        cifra.init(Cipher.DECRYPT_MODE, SecretKeySpec(n.aes, "AES"), IvParameterSpec(iv))
-        var saltar = (ini - bloque).toInt()
-        var restante = fin - ini + 1
-        val entrada = con.inputStream
-        val buf = ByteArray(65536)
-        val claro = ByteArray(65536 + 64)
-        while (restante > 0) {
-            val r = entrada.read(buf)
-            if (r < 0) break
-            val k = cifra.update(buf, 0, r, claro, 0)
-            var off = 0
-            var cnt = k
-            if (saltar > 0) {
-                val s = minOf(saltar, cnt)
-                off = s
-                cnt -= s
-                saltar -= s
-            }
-            if (cnt > 0) {
-                val w = minOf(cnt.toLong(), restante).toInt()
-                sal.write(claro, off, w)
-                restante -= w
-            }
-        }
-        sal.flush()
+        MegaFlujo.descifrar(con.inputStream, n, ini, bloque, fin, sal)
     }
 }
