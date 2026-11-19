@@ -40,7 +40,6 @@ class EditorListaActivity : Activity() {
     private lateinit var vacio: TextView
     private lateinit var lista: ListView
     private lateinit var bCategoria: Button
-    private lateinit var bGuia: Button
 
     private val editable: Boolean get() = info?.esEditable == true
     private val esFav: Boolean get() = id == Biblioteca.ID_FAV
@@ -83,10 +82,6 @@ class EditorListaActivity : Activity() {
             refrescar()
         }
         fila.addView(bPlegar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        bGuia = Button(this)
-        bGuia.text = "Guía"
-        bGuia.setOnClickListener { dialogoGuia() }
-        fila.addView(bGuia, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         raiz.addView(fila)
 
         vacio = TextView(this)
@@ -176,7 +171,6 @@ class EditorListaActivity : Activity() {
         }
         titulo.text = icono + (inf?.nombre ?: "Lista")
         bCategoria.visibility = if (editable) View.VISIBLE else View.GONE
-        bGuia.visibility = if (editable) View.VISIBLE else View.GONE
         val porGrupo = datos.canales.groupBy { it.grupo }
         val res = ArrayList<Fila>()
         for (g in datos.grupos) {
@@ -210,12 +204,15 @@ class EditorListaActivity : Activity() {
         return if (manual.isNotEmpty()) manual else datos.urlGuia
     }
 
-    private fun dialogoGuia() {
-        pedirNombre("Dirección de la guía (XMLTV)", guiaEfectiva() ?: "") { u ->
-            datos.urlGuia = if (u.startsWith("http", true)) u else null
-            aj.fijarGuia(Biblioteca.uriDe(id), "") // manda la de la lista, no una puesta a mano antes
-            if (u.startsWith("http", true)) guardar()
-            else Toast.makeText(this, "Pon una dirección http o https", Toast.LENGTH_SHORT).show()
+    private fun guiaDelCanal(c: Canal) {
+        pedirNombre("Guía de «" + c.nombre + "» (vacío = la de su lista)", c.guia ?: "", true) { u ->
+            if (u.isNotEmpty() && !u.startsWith("http", true)) {
+                Toast.makeText(this, "Pon una dirección http o https", Toast.LENGTH_SHORT).show()
+                return@pedirNombre
+            }
+            val i = indiceDe(c)
+            if (i >= 0) datos.canales[i] = datos.canales[i].copy(guia = u.ifEmpty { null })
+            guardar()
         }
     }
 
@@ -231,7 +228,7 @@ class EditorListaActivity : Activity() {
         startActivity(i)
     }
 
-    private fun pedirNombre(titulo: String, inicial: String, alAceptar: (String) -> Unit) {
+    private fun pedirNombre(titulo: String, inicial: String, vacioOk: Boolean = false, alAceptar: (String) -> Unit) {
         val e = EditText(this)
         e.setText(inicial)
         e.setSelection(e.text.length)
@@ -245,7 +242,7 @@ class EditorListaActivity : Activity() {
             .setView(caja)
             .setPositiveButton("Aceptar") { _, _ ->
                 val n = Biblioteca.limpiarNombre(e.text.toString())
-                if (n.isNotEmpty()) alAceptar(n)
+                if (n.isNotEmpty() || vacioOk) alAceptar(n)
             }
             .setNegativeButton("Cancelar", null)
             .show()
@@ -361,6 +358,7 @@ class EditorListaActivity : Activity() {
         }
         et.add("Copiar a otra lista…"); ac.add { copiarA(listOf(c), c.grupo) }
         if (editable) {
+            et.add("Guía de este canal…"); ac.add { guiaDelCanal(c) }
             et.add("Quitar de esta lista"); ac.add { quitarCanal(c) }
         }
         AlertDialog.Builder(this).setTitle(c.etiqueta).setItems(et.toTypedArray()) { _, i -> ac[i]() }.show()
