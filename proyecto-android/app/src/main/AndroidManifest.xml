@@ -110,6 +110,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".EditorListaActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".DescargasActivity"
             android:exported="false" />
 
