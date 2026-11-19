@@ -290,3 +290,40 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
   si no, activa `compatTemporal` y reabre en modo compatible. Si avanza, lo anota y no hace nada. `vigilanteInicio` se mantiene para los casos sin evento `Playing`.
 - **⋮ › Registro del canal** (siempre que se abre un canal, no solo al emitir): muestra el registro con «Copiar». En modo normal anota la apertura,
   qué vio el vigilante (tiempo, búfer, último evento) y si reabrió en modo compatible; en modo compatible, lo de `RetransmisionHls`.
+
+## 0.8.2 — Subtítulos propios para directos y guardado de Mega
+
+(Fusión de dos ramas hechas a partir de la 0.8.1.)
+
+### Subtítulos propios para directos (reloj independiente)
+
+- En un canal en directo, los subtítulos cargados (archivo o OpenSubtitles) ya no se pasan a libVLC: los dibuja la app con su propio reloj,
+  con el estilo de Ajustes (tamaño, color, fondo, contorno, negrita, altura). Así no dependen del reloj del vídeo y no se descuadran si el canal
+  reinicia el suyo.
+- **CC › Sincronizar** abre una columna semitransparente con todas las líneas y su minuto. Se toca la frase que se está oyendo y los subtítulos
+  siguen desde ahí (la columna sigue la línea actual, resaltada). Incluye búsqueda por texto, barra de desplazamiento rápida, ajuste fino
+  −500/−100/+100/+500 y «⏸ Anuncio» / «▶ Reanudar», que congela el reloj de los subtítulos durante un corte.
+- CC › «Quitar subtítulos del directo».
+- En directos con reloj propio, los subtítulos no se envían a la tele al emitir.
+- «Buscar en OpenSubtitles» propone inglés si el audio es inglés y español si es otro idioma conocido; se puede cambiar.
+- Archivos de subtítulos: SRT, WebVTT y ASS/SSA.
+
+### Guardar en el dispositivo lo que se reproduce de Mega
+
+- **⋮ › Guardar este archivo en el dispositivo** y, en carpetas, **⋮ › Guardar toda la carpeta de Mega (N archivos)**. También en la pulsación larga de una pista de la cola.
+  Va a *Descargas/OptimoPlay/…* (Android 10+ sin permisos; Android 9, a la carpeta propia de la app), igual que los torrents, y aparece en la pantalla **Descargas**
+  (que ya no es «solo de torrents»). Una carpeta conserva su nombre y sus subcarpetas: `Descargas/OptimoPlay/<carpeta de Mega>/<subcarpeta>/<archivo>`.
+  Se guarda también lo que no es audio ni vídeo (subtítulos, portadas…).
+- **Cómo:** `MegaGuardado.kt` baja cada archivo de Mega con su propia conexión, lo descifra al vuelo y lo escribe directamente en su destino (`Exportar.aDescargasFlujo`).
+  **No hay copia temporal**: cada archivo ocupa solo su tamaño (los torrents necesitan el doble). Los archivos se bajan de uno en uno; si la conexión se corta a mitad,
+  se reanuda por el byte donde iba (hasta 5 reintentos). El mismo descifrado AES-CTR se comparte con el reproductor (`MegaFlujo.kt`).
+- **Estado:** el progreso («⬇ Guardando en el dispositivo: 2 archivos · 37 %») sale en pantalla y en la notificación. Tocar de nuevo «Guardar este archivo» sobre uno en cola lo cancela;
+  **⋮ › Cancelar los guardados** corta todo (lo ya guardado se queda).
+- **Segundo plano:** como con los torrents, al salir con guardados pendientes se ofrece «Seguir en segundo plano»; el servicio se cierra solo al acabar. Abrir otra fuente
+  con guardados en curso pregunta antes de cancelarlos.
+- **Sin duplicados:** si el archivo ya está en Descargas con la misma ruta y tamaño se omite.
+- **Cuota de Mega:** guardar gasta la misma cuota de transferencia que ver. Si se agota, el guardado para y lo marca como error con ese motivo (no se reintentan los demás).
+  Reproducir y guardar el mismo archivo a la vez lo baja dos veces.
+- **Límites:** no se reanuda tras cerrar la app (un archivo a medias se descarta y se empieza de nuevo). Hace falta espacio libre igual al tamaño de lo que se guarda (se avisa).
+- **Dónde mirar si algo falla:** `MegaGuardado.kt`, `PlaybackService` (sección «guardar archivos de Mega») y `PlayerActivity.pedirGuardarMega`.
+- No compilado ni probado contra Mega real en el entorno donde se escribió.
