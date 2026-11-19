@@ -56,6 +56,19 @@ class ListaM3u(val canales: List<Canal>, val urlGuia: String?) {
             return true
         }
 
+        /** Dirección de la guía (url-tvg) que anuncia la cabecera #EXTM3U, si la hay. */
+        fun guiaDeCabecera(texto: String): String? {
+            for (raw in texto.removePrefix("\uFEFF").lineSequence()) {
+                val l = raw.trim()
+                if (l.startsWith("#EXTM3U", true)) {
+                    val a = atributos(l.substring(7))
+                    return (a["url-tvg"] ?: a["x-tvg-url"] ?: a["tvg-url"])?.split(',')?.firstOrNull()?.trim()
+                        ?.takeIf { it.startsWith("http", true) }
+                }
+            }
+            return null
+        }
+
         /** Entradas de una lista (líneas que no son etiquetas), cada una con el título de su #EXTINF si lo hay. */
         fun entradas(texto: String): List<EntradaM3u> {
             val salida = ArrayList<EntradaM3u>()
