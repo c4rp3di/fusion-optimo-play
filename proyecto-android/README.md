@@ -327,3 +327,35 @@ Motivo: con vídeos de YouTube (que Optimo no debería ofrecer y que libVLC no p
 - **Límites:** no se reanuda tras cerrar la app (un archivo a medias se descarta y se empieza de nuevo). Hace falta espacio libre igual al tamaño de lo que se guarda (se avisa).
 - **Dónde mirar si algo falla:** `MegaGuardado.kt`, `PlaybackService` (sección «guardar archivos de Mega») y `PlayerActivity.pedirGuardarMega`.
 - No compilado ni probado contra Mega real en el entorno donde se escribió.
+
+## 0.9.1 — Archivos comprimidos de Mega (RAR/RAR5, 7z, ZIP, partes): extraer, juntar y reproducir
+
+Muchos enlaces de Mega traen el contenido comprimido y repartido en partes. Ahora Optimo los trata sin salir de la app.
+
+- **Qué detecta** (`MegaPaquetes.kt`): `Peli.part1.rar … partN.rar`, `Peli.rar + .r00 .r01…`, `Peli.7z.001…`, `Peli.zip + .z01…`, partes numeradas `.001…` y un `.rar/.zip/.7z` suelto.
+  Agrupa las partes de cada carpeta, avisa de las que faltan («Faltan part3, part7») y no deja extraer un paquete incompleto.
+- **Dónde sale:** si el enlace solo tiene archivos comprimidos, al abrirlo aparece la lista **Archivos comprimidos** (también en ⋮ › Archivos comprimidos…). Tocar uno:
+  - **Descargar y extraer en el dispositivo** (fases 1 y 2): baja las partes a la caché, las junta, extrae a *Descargas/OptimoPlay/<carpeta de Mega>/…* **directamente**
+    (sin copia intermedia) y borra las partes. Admite **RAR (también RAR5), 7z, ZIP y partes .001**, **con contraseña** (se pide en un diálogo y solo se guarda en memoria).
+    Si se corta la conexión reanuda por el byte donde iba, **incluso tras cerrar la app** (las partes ya bajadas quedan en caché); si falta la contraseña, las partes
+    ya están bajadas y solo se repite la extracción; lo que ya estaba extraído se salta.
+  - **Reproducir lo extraído:** abre en cola los audios y vídeos que salieron.
+  - **Reproducir sin extraer** (fase 3): para un **RAR5 con los vídeos almacenados sin comprimir** (método «almacenar») y sin contraseña. No baja ni extrae nada: lee las cabeceras
+    de las partes (≈1 petición por parte, 4 a la vez) y sirve el vídeo por rangos, leyendo solo los trozos de las partes que hacen falta, con saltos de posición. Funciona también
+    al enviar a la tele. Si el RAR está comprimido, cifrado o es RAR4, lo dice y ofrece extraerlo.
+- **Piezas:** `MegaPaquetes.kt` (detección), `MegaExtractor.kt` (trabajos: bajar → extraer → limpiar, contraseña, progreso, notificación), `Descompresor.kt` (motor 7-Zip),
+  `RarAlmacenado.kt` (lector de cabeceras RAR5 + `MegaVirtual`), `MegaFlujo.kt`/`Mega.kt` (`MegaFuente`: ahora el servidor local sirve tanto archivos de Mega como vídeos virtuales de dentro de un RAR).
+  `Exportar.abrirSalida` permite escribir cada archivo extraído directo en Descargas (`aDescargasFlujo` ahora se apoya en ella).
+- **Dependencia nueva:** `com.github.omicronapps:7-Zip-JBinding-4Android:Release-16.02-2.03` desde **JitPack** (`settings.gradle` lo añade solo para ese grupo). La 2.03 trae las
+  librerías nativas alineadas a 16 KB. Añade varios MB a la app.
+- **Segundo plano y estado:** como los demás guardados: progreso en pantalla y notificación, «Seguir en segundo plano» al salir, el servicio se cierra solo al acabar.
+- **Espacio:** mientras se extrae ocupan a la vez las partes y el resultado (se avisa antes de empezar: ≈ 2 × el tamaño del paquete).
+- **Límites / sin verificar** (no se pudo compilar ni probar contra Mega real ni con la biblioteca en este entorno):
+  - La **API de JBinding** está escrita según su documentación; **RAR5 con contraseña** depende de que el 7-Zip 16.02 que lleva lo soporte: probarlo con un RAR5 cifrado real es lo primero.
+  - **ZIP dividido (.z01)** y **partes .001** dependen de cómo el motor pide los volúmenes: sin probar.
+  - JitPack compila la biblioteca la primera vez que se pide: la primera sincronización de Gradle puede tardar o fallar; reintentar.
+  - «Reproducir sin extraer» solo con **RAR5**; RAR4 almacenado, ZIP almacenado y 7z «copy» se extraen. Con la contraseña mala en un RAR cifrado con datos (no cabeceras) el fallo se detecta
+    al primer archivo, que en RAR4 puede ser tras extraerlo entero.
+  - El RAR de licencia «unRAR» incluido en 7-Zip solo permite extraer (no es software libre): irrelevante para uso personal, a tener en cuenta si se distribuye.
+- **Validación:** `tools/prueba_rar5.py` construye volúmenes RAR5 sintéticos según la especificación (archivos partidos en varios volúmenes, con y sin bloque «RR», cifrado,
+  método ≠ 0, cabeceras cifradas) y comprueba que el algoritmo de `RarAlmacenado` ubica cada trozo y que leer rangos aleatorios devuelve exactamente los bytes originales.
