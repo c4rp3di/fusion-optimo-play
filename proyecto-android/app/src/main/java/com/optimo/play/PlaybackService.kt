@@ -120,6 +120,12 @@ class PlaybackService : Service() {
     /** Nombre de la carpeta de Mega («» si el enlace es un archivo suelto): es la carpeta raíz al guardar. */
     @Volatile var megaRaiz: String = ""
     private var megaGuardadoObj: MegaGuardado? = null
+    /** Archivos comprimidos (RAR, ZIP, 7z…) del enlace de Mega, con todas sus partes. */
+    @Volatile var megaPaquetes: List<MegaPaquete> = emptyList()
+    /** Hay paquetes y nada que reproducir directamente: la actividad enseña la lista para elegir qué hacer. */
+    @Volatile var necesitaElegirPaquete = false
+    private var extractorObj: MegaExtractor? = null
+    private val indicesRar = java.util.concurrent.ConcurrentHashMap<String, RarIndice>()
     val esMega: Boolean get() = megaOrigen != null
     private val subsExternas = ArrayList<File>()
     @Volatile var archivoTorrentActual: ArchivoTorrent? = null
@@ -1039,9 +1045,15 @@ class PlaybackService : Service() {
     ).also { megaGuardadoObj = it }
 
     private fun cerrarMega(cancelarGuardado: Boolean = true) {
-        if (cancelarGuardado) megaGuardadoObj?.cancelarTodo()
+        if (cancelarGuardado) {
+            megaGuardadoObj?.cancelarTodo()
+            extractorObj?.cancelarTodo()
+        }
         megaArchivos = emptyList()
         megaRaiz = ""
+        megaPaquetes = emptyList()
+        necesitaElegirPaquete = false
+        indicesRar.clear()
         genMega++
         hiloMega?.interrupt()
         hiloMega = null
@@ -1116,6 +1128,27 @@ class PlaybackService : Service() {
                 })
                 if (!datos.carpeta) {
                     val nodo = cli.infoArchivo(datos.handle, clave)
+                    val paqSuelto = if (!Utiles.esReproducible(nodo.nombre)) MegaPaquetes.detectar(listOf(nodo)) else emptyList()
+                    if (paqSuelto.isNotEmpty()) {
+                        // Un .rar / .zip / .7z suelto: no se reproduce directamente; se ofrece extraerlo.
+                        main.post {
+                            if (gen != genMega) {
+                                srv.detener()
+                                return@post
+                            }
+                            servidorMega = srv
+                            clienteMega = cli
+                            megaArchivos = listOf(nodo)
+                            megaRaiz = ""
+                            megaPaquetes = paqSuelto
+                            necesitaElegirPaquete = true
+                            estado = "Archivo comprimido: elige qué hacer"
+                            titulo = nodo.nombre
+                            ajustes.registrar(f.uri, nodo.nombre)
+                            crearReproductor()
+                        }
+                        return@Thread
+                    }
                     val url = srv.url(nodo)
                     main.post {
                         if (gen != genMega) {
@@ -1136,7 +1169,33 @@ class PlaybackService : Service() {
                     val dir = cli.listarCarpeta(clave)
                     var lista = dir.archivos.filter { Utiles.esReproducible(it.nombre) }
                     if (sub != null && datos.subCarpeta) lista = lista.filter { it.padres.contains(sub) }
+                    val paquetes = MegaPaquetes.detectar(
+                        if (sub != null && datos.subCarpeta) dir.archivos.filter { it.padres.contains(sub) } else dir.archivos
+                    )
                     if (lista.isEmpty()) {
+                        if (paquetes.isNotEmpty()) {
+                            // Solo hay archivos comprimidos: se ofrece reproducirlos sin extraer o extraerlos.
+                            val todosP = dir.archivos.sortedWith { a, b ->
+                                val c = Utiles.comparaNatural(a.ruta, b.ruta)
+                                if (c != 0) c else Utiles.comparaNatural(a.nombre, b.nombre)
+                            }
+                            main.post {
+                                if (gen != genMega) {
+                                    srv.detener()
+                                    return@post
+                                }
+                                servidorMega = srv
+                                clienteMega = cli
+                                megaArchivos = todosP
+                                megaRaiz = dir.nombre
+                                megaPaquetes = paquetes
+                                necesitaElegirPaquete = true
+                                estado = "Archivos comprimidos: elige qué hacer"
+                                titulo = dir.nombre
+                                crearReproductor()
+                            }
+                            return@Thread
+                        }
                         throw MegaException(
                             MegaException.GENERAL,
                             if (dir.archivos.isEmpty()) "La carpeta de Mega está vacía"
@@ -1169,6 +1228,7 @@ class PlaybackService : Service() {
                         clienteMega = cli
                         megaArchivos = todos
                         megaRaiz = dir.nombre
+                        megaPaquetes = paquetes
                         abrirCola(pistas, inicio, dir.nombre, true)
                     }
                 }
@@ -1690,6 +1750,7 @@ class PlaybackService : Service() {
         guardarPos()
         hiloTorrent?.interrupt()
         megaGuardadoObj?.cancelarTodo()
+        extractorObj?.cancelarTodo()
         motor.cerrar()
         destruirReproductor()
         liberarBloqueos()
@@ -1808,7 +1869,8 @@ class PlaybackService : Service() {
     fun estadoGuardado(a: ArchivoTorrent): Int = motor.guardado[a.indice] ?: -2
 
     fun hayGuardadoPendiente(): Boolean =
-        (esTorrent && motor.pendientesGuardar() > 0) || (megaGuardadoObj?.pendientes() ?: 0) > 0
+        (esTorrent && motor.pendientesGuardar() > 0) || (megaGuardadoObj?.pendientes() ?: 0) > 0 ||
+            (extractorObj?.pendientes() ?: 0) > 0
 
     /** Espacio libre donde se descarga (la caché de la app). */
     fun espacioLibre(): Long = cacheDir.usableSpace
@@ -1849,7 +1911,10 @@ class PlaybackService : Service() {
 
     /** «2 archivos · 37 %» para la notificación. */
     fun resumenGuardado(): String {
-        if (!esTorrent) return megaGuardadoObj?.resumen() ?: ""
+        if (!esTorrent) {
+            return listOf(megaGuardadoObj?.resumen() ?: "", extractorObj?.resumen() ?: "")
+                .filter { it.isNotEmpty() }.joinToString(" · ")
+        }
         val g = motor.pendientesGuardar()
         if (g == 0) return ""
         var suma = 0
@@ -1937,6 +2002,130 @@ class PlaybackService : Service() {
                 if (mp != null) notificar()
             }
         }
+    }
+
+    // ---------------------------------------------------------------- paquetes comprimidos de Mega
+
+    private fun ex(): MegaExtractor = extractorObj ?: MegaExtractor(
+        this,
+        { main.post { notificar() } },
+        { m: String -> avisoUi = m },
+        { main.post { tomarBloqueos() } },
+        { main.post { alTerminarGuardadoMega() } }
+    ).also {
+        extractorObj = it
+        Thread { MegaExtractor.limpiarCacheAntigua(this) }.start()
+    }
+
+    /** -2 sin tocar, 0 en cola o trabajando, 1 esperando contraseña, 2 extraído, -1 error. */
+    fun estadoPaquete(p: MegaPaquete): Int = extractorObj?.estadoDe(p.id) ?: -2
+
+    /** «Peli: bajando parte 3/12 · 25 %». */
+    fun fasePaquete(p: MegaPaquete): String = extractorObj?.faseDe(p.id) ?: ""
+
+    fun errorPaquete(p: MegaPaquete): String? = extractorObj?.errores?.get(p.id)
+
+    /** Paquete que está esperando su contraseña (o con la dada incorrecta). */
+    val paqueteEsperandoClave: MegaPaquete? get() = extractorObj?.esperandoClave
+
+    val avisoClavePaquete: String? get() = extractorObj?.avisoClave
+
+    /** Baja las partes, las junta y extrae el contenido a Descargas/OptimoPlay. */
+    fun extraerPaquete(p: MegaPaquete) {
+        val cli = clienteMega ?: run {
+            avisoUi = "Este enlace de Mega ya no está abierto"
+            return
+        }
+        necesitaElegirPaquete = false
+        ex().iniciar(cli, p, megaRaiz, null)
+    }
+
+    fun cancelarPaquete(p: MegaPaquete) {
+        extractorObj?.cancelar(p.id)
+        notificar()
+    }
+
+    fun darClavePaquete(clave: String) {
+        extractorObj?.darClave(clave)
+    }
+
+    fun claveRechazadaPaquete() {
+        extractorObj?.rechazarClave()
+    }
+
+    /** Reproduce (en cola) lo que ya se extrajo de un paquete, desde Descargas. */
+    fun reproducirExtraido(p: MegaPaquete) {
+        val rutas = extractorObj?.resultados?.get(p.id) ?: return
+        Thread {
+            val guardados = Exportar.listar(this).associateBy { it.ruta }
+            val lista = rutas.mapNotNull { guardados[it] }
+                .filter { Utiles.esReproducible(it.nombre) }
+                .sortedWith { a, b -> Utiles.comparaNatural(a.ruta, b.ruta) }
+            main.post {
+                if (lista.isEmpty()) {
+                    avisoUi = "No hay audio ni vídeo en lo extraído"
+                    return@post
+                }
+                necesitaElegirPaquete = false
+                abrirCola(lista.map { Pista(it.uri.toString(), it.nombre) }, 0, p.base, true)
+            }
+        }.start()
+    }
+
+    /**
+     * Reproduce los vídeos de un RAR5 en varias partes sin bajarlo ni extraerlo, si están guardados sin comprimir (método
+     * «almacenar») y sin contraseña: se leen solo los trozos de las partes que hacen falta. Si no es posible lo dice y deja
+     * la lista de paquetes para extraerlo.
+     */
+    fun reproducirSinExtraer(p: MegaPaquete) {
+        val cli = clienteMega
+        val srv = servidorMega
+        if (cli == null || srv == null) {
+            avisoUi = "Este enlace de Mega ya no está abierto"
+            return
+        }
+        if (p.tipo != MegaPaquete.Tipo.RAR || !p.completo) {
+            avisoUi = "Solo se puede reproducir sin extraer un RAR completo"
+            return
+        }
+        val gen = genMega
+        necesitaElegirPaquete = false
+        estado = "Leyendo el paquete…"
+        val t = Thread {
+            try {
+                val idx = indicesRar[p.id]
+                    ?: RarAlmacenado.indexar(
+                        cli, p.partes,
+                        { hechas, total -> estado = "Leyendo el paquete… " + hechas + "/" + total },
+                        { gen != genMega }
+                    ).also { indicesRar[p.id] = it }
+                val validas = idx.reproducibles.sortedWith { a, b -> Utiles.comparaNatural(a.nombre, b.nombre) }
+                if (validas.isEmpty()) throw RarNoIndexable(idx.motivoNo())
+                val pistas = validas.map { e ->
+                    val nombre = e.nombre.substringAfterLast('/')
+                    val v = MegaVirtual("r" + java.lang.Long.toString(System.nanoTime(), 36), nombre, p.partes, e.segmentos)
+                    Pista(srv.url(v), nombre)
+                }
+                main.post {
+                    if (gen != genMega) return@post
+                    estado = ""
+                    abrirCola(pistas, 0, p.base, true)
+                }
+            } catch (e: InterruptedException) {
+                // Cancelado por otra apertura.
+            } catch (e: Exception) {
+                if (gen == genMega) {
+                    val m = when (e) {
+                        is RarNoIndexable, is MegaException -> e.message
+                        else -> "No se pudo leer el paquete: " + (e.message ?: e.javaClass.simpleName)
+                    }
+                    estado = ""
+                    avisoUi = (m ?: "Error") + ". Prueba «Descargar y extraer»."
+                    necesitaElegirPaquete = true
+                }
+            }
+        }
+        t.start()
     }
 
     // ---------------------------------------------------------------- guardar archivos de Mega
