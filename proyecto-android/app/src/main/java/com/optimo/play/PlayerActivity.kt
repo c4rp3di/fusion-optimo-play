@@ -97,8 +97,10 @@ class PlayerActivity : Activity() {
     private var panelColaAbierto = false
     private var pidiendoCarpeta = false
     private var pidiendoClaveMega = false
-    private var pidiendoPaquete = false
-    private var pidiendoClavePaquete = false
+    // Diálogos de archivos comprimidos que están en pantalla (no banderas: un diálogo que se cierra al abrir el siguiente no debe
+    // hacer que la lista se vuelva a abrir encima).
+    private var dlgPaquete: android.app.Dialog? = null
+    private var dlgClavePaquete: android.app.Dialog? = null
     private var audioVisto = false
     private lateinit var filaBot: LinearLayout
     private lateinit var filaOpc: LinearLayout
@@ -757,7 +759,7 @@ class PlayerActivity : Activity() {
         marco.setPadding(dp(20), dp(8), dp(20), 0)
         marco.addView(campo)
         val aviso = s.avisoClavePaquete
-        AlertDialog.Builder(this)
+        val d = AlertDialog.Builder(this)
             .setTitle("«" + p.base + "» tiene contraseña")
             .setMessage(
                 if (aviso != null) "$aviso. Vuelve a escribirla."
@@ -767,16 +769,55 @@ class PlayerActivity : Activity() {
             .setPositiveButton("Extraer") { _, _ -> s.darClavePaquete(campo.text.toString()) }
             .setNegativeButton("Cancelar") { _, _ -> s.claveRechazadaPaquete() }
             .setOnCancelListener { s.claveRechazadaPaquete() }
+            .create()
+        dlgClavePaquete = d
+        d.setOnDismissListener { if (dlgClavePaquete === d) dlgClavePaquete = null }
+        d.show()
+    }
+
+    /** Enseña un diálogo de paquete y lo recuerda como «el que está en pantalla» (se olvida solo cuando ese mismo se cierra). */
+    private fun mostrarDlgPaquete(b: AlertDialog.Builder) {
+        val d = b.create()
+        dlgPaquete = d
+        d.setOnDismissListener { if (dlgPaquete === d) dlgPaquete = null }
+        d.show()
+    }
+
+    private fun dialogoFalloPaquete(mensaje: String) {
+        AlertDialog.Builder(this)
+            .setTitle("No se pudo extraer")
+            .setMessage(mensaje)
+            .setPositiveButton("Ver registro") { _, _ -> dialogoRegistroMega() }
+            .setNegativeButton("Cerrar", null)
+            .show()
+    }
+
+    /** Registro de lo que ha pasado al bajar y extraer (para saber por qué falla algo), con «Copiar». */
+    private fun dialogoRegistroMega() {
+        val tv = android.widget.TextView(this)
+        tv.text = RegistroMega.texto()
+        tv.typeface = android.graphics.Typeface.MONOSPACE
+        tv.textSize = 11f
+        tv.setTextIsSelectable(true)
+        tv.setPadding(dp(16), dp(8), dp(16), dp(8))
+        val scroll = android.widget.ScrollView(this)
+        scroll.addView(tv)
+        AlertDialog.Builder(this)
+            .setTitle("Registro de extracción")
+            .setView(scroll)
+            .setPositiveButton("Copiar") { _, _ ->
+                val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("Optimo Play", RegistroMega.texto()))
+                aviso("Registro copiado")
+            }
+            .setNegativeButton("Cerrar", null)
             .show()
     }
 
     /** Lista de los archivos comprimidos del enlace de Mega: tocar uno para ver qué se puede hacer con él. */
     private fun dialogoPaquetes(s: PlaybackService, automatico: Boolean) {
         val ps = s.megaPaquetes
-        if (ps.isEmpty()) {
-            pidiendoPaquete = false
-            return
-        }
+        if (ps.isEmpty()) return
         val filas = ps.map { p ->
             val est = s.estadoPaquete(p)
             val marca = when {
@@ -798,17 +839,17 @@ class PlayerActivity : Activity() {
         } else {
             b.setNegativeButton("Cerrar", null)
         }
-        b.show()
+        mostrarDlgPaquete(b)
     }
 
     private fun menuPaquete(s: PlaybackService, p: MegaPaquete) {
         if (p.faltan != null) {
-            AlertDialog.Builder(this)
-                .setTitle(p.base)
-                .setMessage(p.faltan + ". Sin todas las partes no se puede extraer ni reproducir.")
-                .setPositiveButton("Entendido", null)
-                .setOnDismissListener { pidiendoPaquete = false }
-                .show()
+            mostrarDlgPaquete(
+                AlertDialog.Builder(this)
+                    .setTitle(p.base)
+                    .setMessage(p.faltan + ". Sin todas las partes no se puede extraer ni reproducir.")
+                    .setPositiveButton("Entendido", null)
+            )
             return
         }
         val etiquetas = ArrayList<String>()
@@ -825,12 +866,12 @@ class PlayerActivity : Activity() {
             }
             etiquetas.add(if (est == 2) "Volver a extraer" else "Descargar y extraer en el dispositivo"); acciones.add { pedirExtraer(p) }
         }
-        AlertDialog.Builder(this)
-            .setTitle(p.base)
-            .setItems(etiquetas.toTypedArray()) { _, i -> acciones[i]() }
-            .setNegativeButton("Cerrar", null)
-            .setOnDismissListener { pidiendoPaquete = false }
-            .show()
+        mostrarDlgPaquete(
+            AlertDialog.Builder(this)
+                .setTitle(p.base)
+                .setItems(etiquetas.toTypedArray()) { _, i -> acciones[i]() }
+                .setNegativeButton("Cerrar", null)
+        )
     }
 
     /** Confirma (y avisa del espacio) antes de bajar las partes de un archivo comprimido y extraerlo. */
@@ -855,7 +896,7 @@ class PlayerActivity : Activity() {
                 )
                 .setPositiveButton("Empezar") { _, _ -> hacer() }
         }
-        b.setNegativeButton("Cancelar", null).setOnDismissListener { pidiendoPaquete = false }.show()
+        mostrarDlgPaquete(b.setNegativeButton("Cancelar", null))
     }
 
     private fun dialogoCarpeta(s: PlaybackService, doc: Uri) {
@@ -1748,23 +1789,15 @@ class PlayerActivity : Activity() {
         }
 
         // Archivos comprimidos de Mega: si no hay nada que reproducir directamente, la lista sale sola hasta que se elija qué hacer.
-        if (s.necesitaElegirPaquete) {
-            if (!pidiendoPaquete) {
-                pidiendoPaquete = true
-                dialogoPaquetes(s, true)
-            }
-        }
+        if (s.necesitaElegirPaquete && dlgPaquete?.isShowing != true) dialogoPaquetes(s, true)
+
+        // Si una extracción falla, el motivo se enseña en un diálogo (no solo en un aviso que se va solo).
+        val fallo = s.tomarFalloPaquete()
+        if (fallo != null) dialogoFalloPaquete(fallo)
 
         // Contraseña de un archivo comprimido que se está extrayendo (otra vez si la dada era incorrecta).
         val esperando = s.paqueteEsperandoClave
-        if (esperando != null) {
-            if (!pidiendoClavePaquete) {
-                pidiendoClavePaquete = true
-                dialogoClavePaquete(s, esperando)
-            }
-        } else {
-            pidiendoClavePaquete = false
-        }
+        if (esperando != null && dlgClavePaquete?.isShowing != true) dialogoClavePaquete(s, esperando)
 
         // Lista de canales: el panel se abre solo al cargarla, hasta que se elija uno.
         if (s.hayCanales) {
@@ -2053,6 +2086,7 @@ class PlayerActivity : Activity() {
         }
         if (s.esMega && s.megaPaquetes.isNotEmpty()) {
             etiquetas.add("Archivos comprimidos (" + s.megaPaquetes.size + ")…"); acciones.add { dialogoPaquetes(s, false) }
+            etiquetas.add("Registro de extracción"); acciones.add { dialogoRegistroMega() }
         }
         if (s.esMega && s.megaArchivos.isNotEmpty()) {
             val actualMega = s.megaNodoActual()
