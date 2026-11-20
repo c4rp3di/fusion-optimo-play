@@ -69,69 +69,108 @@ object Exportar {
         return aDescargasFlujo(ctx, ruta) { o -> origen.inputStream().use { i -> copiar(i, o, cancelado) } }
     }
 
+    /** Un archivo de Descargas/OptimoPlay que se está escribiendo: se cierra con [terminar] (queda listo) o [abortar] (se borra). */
+    class Salida(
+        val flujo: OutputStream,
+        private val alTerminar: () -> Unit,
+        private val alAbortar: () -> Unit
+    ) {
+        /** Cierra y deja el archivo listo en Descargas. Puede lanzar IOException. */
+        fun terminar() {
+            flujo.close()
+            alTerminar()
+        }
+
+        /** Cierra y borra lo escrito (no lanza nada). */
+        fun abortar() {
+            try { flujo.close() } catch (e: Exception) { /* nada */ }
+            try { alAbortar() } catch (e: Exception) { /* nada */ }
+        }
+    }
+
+    /**
+     * Abre Descargas/OptimoPlay/[ruta] para escribir (sustituyendo uno con el mismo nombre). Quien lo llama escribe en
+     * [Salida.flujo] y termina con [Salida.terminar] o [Salida.abortar]. Lanza IOException si no se puede crear.
+     */
+    fun abrirSalida(ctx: Context, ruta: String): Salida {
+        val nombre = ruta.substringAfterLast('/')
+        val sub = ruta.substringBeforeLast('/', "")
+        if (Build.VERSION.SDK_INT >= 29) {
+            val res = ctx.contentResolver
+            // Si ya hay uno con ese nombre (a medias o distinto) se sustituye: nunca «nombre (1)».
+            try {
+                res.query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.MediaColumns._ID),
+                    MediaStore.MediaColumns.RELATIVE_PATH + " = ? AND " + MediaStore.MediaColumns.DISPLAY_NAME + " = ?",
+                    arrayOf(relativo(sub), nombre),
+                    null
+                )?.use { c ->
+                    val ids = ArrayList<Long>()
+                    while (c.moveToNext()) ids.add(c.getLong(0))
+                    for (id in ids) {
+                        try {
+                            res.delete(ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id), null, null)
+                        } catch (e: Exception) {
+                            // Si no se puede quitar, el sistema pondrá un número al nuevo.
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Sin consulta: se sigue igualmente.
+            }
+            val valores = ContentValues()
+            valores.put(MediaStore.MediaColumns.DISPLAY_NAME, nombre)
+            valores.put(MediaStore.MediaColumns.MIME_TYPE, Utiles.tipoMime(nombre))
+            valores.put(MediaStore.MediaColumns.RELATIVE_PATH, relativo(sub).trimEnd('/'))
+            valores.put(MediaStore.MediaColumns.IS_PENDING, 1)
+            val uri = res.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, valores)
+                ?: throw IOException("No se pudo crear el archivo en Descargas")
+            val salida = try {
+                res.openOutputStream(uri) ?: throw IOException("No se puede escribir en Descargas")
+            } catch (e: Exception) {
+                try { res.delete(uri, null, null) } catch (x: Exception) { /* nada */ }
+                throw e
+            }
+            return Salida(
+                salida,
+                {
+                    val listo = ContentValues()
+                    listo.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    res.update(uri, listo, null, null)
+                },
+                { res.delete(uri, null, null) }
+            )
+        } else {
+            val base = baseAndroid9(ctx) ?: throw IOException("Sin almacenamiento externo")
+            val dir = if (sub.isEmpty()) base else File(base, sub)
+            dir.mkdirs()
+            val destino = File(dir, nombre)
+            val tmp = File(dir, "$nombre.parte")
+            return Salida(
+                tmp.outputStream(),
+                {
+                    if (destino.exists()) destino.delete()
+                    if (!tmp.renameTo(destino)) throw IOException("No se pudo guardar el archivo")
+                },
+                { tmp.delete() }
+            )
+        }
+    }
+
     /**
      * Crea Descargas/OptimoPlay/[ruta] (sustituyendo uno con el mismo nombre) y deja que [llenar] escriba su contenido.
      * Si [llenar] falla o se cancela, no queda un archivo a medias. Devuelve null si todo fue bien, o el texto del error.
      */
     fun aDescargasFlujo(ctx: Context, ruta: String, llenar: (OutputStream) -> Unit): String? {
-        val nombre = ruta.substringAfterLast('/')
-        val sub = ruta.substringBeforeLast('/', "")
         return try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                val res = ctx.contentResolver
-                // Si ya hay uno con ese nombre (a medias o distinto) se sustituye: nunca «nombre (1)».
-                try {
-                    res.query(
-                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                        arrayOf(MediaStore.MediaColumns._ID),
-                        MediaStore.MediaColumns.RELATIVE_PATH + " = ? AND " + MediaStore.MediaColumns.DISPLAY_NAME + " = ?",
-                        arrayOf(relativo(sub), nombre),
-                        null
-                    )?.use { c ->
-                        val ids = ArrayList<Long>()
-                        while (c.moveToNext()) ids.add(c.getLong(0))
-                        for (id in ids) {
-                            try {
-                                res.delete(ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id), null, null)
-                            } catch (e: Exception) {
-                                // Si no se puede quitar, el sistema pondrá un número al nuevo.
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    // Sin consulta: se sigue igualmente.
-                }
-                val valores = ContentValues()
-                valores.put(MediaStore.MediaColumns.DISPLAY_NAME, nombre)
-                valores.put(MediaStore.MediaColumns.MIME_TYPE, Utiles.tipoMime(nombre))
-                valores.put(MediaStore.MediaColumns.RELATIVE_PATH, relativo(sub).trimEnd('/'))
-                valores.put(MediaStore.MediaColumns.IS_PENDING, 1)
-                val uri = res.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, valores)
-                    ?: return "No se pudo crear el archivo en Descargas"
-                try {
-                    val salida = res.openOutputStream(uri) ?: throw IOException("No se puede escribir en Descargas")
-                    salida.use { o -> llenar(o) }
-                    val listo = ContentValues()
-                    listo.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                    res.update(uri, listo, null, null)
-                } catch (e: Exception) {
-                    try { res.delete(uri, null, null) } catch (x: Exception) { /* nada */ }
-                    throw e
-                }
-            } else {
-                val base = baseAndroid9(ctx) ?: return "Sin almacenamiento externo"
-                val dir = if (sub.isEmpty()) base else File(base, sub)
-                dir.mkdirs()
-                val destino = File(dir, nombre)
-                val tmp = File(dir, "$nombre.parte")
-                try {
-                    tmp.outputStream().use { o -> llenar(o) }
-                    if (destino.exists()) destino.delete()
-                    if (!tmp.renameTo(destino)) throw IOException("No se pudo guardar el archivo")
-                } catch (e: Exception) {
-                    tmp.delete()
-                    throw e
-                }
+            val s = abrirSalida(ctx, ruta)
+            try {
+                llenar(s.flujo)
+                s.terminar()
+            } catch (e: Exception) {
+                s.abortar()
+                throw e
             }
             null
         } catch (e: Exception) {
