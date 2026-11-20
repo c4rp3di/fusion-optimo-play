@@ -11,6 +11,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Solo para el motor 7-Zip (JBinding): JitPack no se usa para nada más.
+        maven {
+            url 'https://jitpack.io'
+            content { includeGroup 'com.github.omicronapps' }
+        }
     }
 }
 
