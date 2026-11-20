@@ -12,8 +12,8 @@ android {
         // libtorrent4j exige Android 9 (API 28) o superior.
         minSdk 28
         targetSdk 34
-        versionCode 40
-        versionName '0.8.2'
+        versionCode 41
+        versionName '0.9.1'
 
         // Solo los ABI de moviles reales: recorta el peso de libVLC y libtorrent4j.
         ndk {
@@ -65,6 +65,10 @@ dependencies {
     implementation 'org.libtorrent4j:libtorrent4j:2.1.0-39'
     implementation 'org.libtorrent4j:libtorrent4j-android-arm64:2.1.0-39'
     implementation 'org.libtorrent4j:libtorrent4j-android-arm:2.1.0-39'
+
+    // Motor 7-Zip (RAR/RAR5, 7z, ZIP, partes .001, con contraseña y volúmenes) para los archivos comprimidos de Mega.
+    // 2.03 trae las librerias nativas alineadas a 16 KB (hace falta en Android 15+ con paginas de 16 KB).
+    implementation 'com.github.omicronapps:7-Zip-JBinding-4Android:Release-16.02-2.03'
 
     // Chromecast (Google Cast). Solo lo usan CastGoogle.kt y CastOpciones.kt.
     implementation 'com.google.android.gms:play-services-cast-framework:21.5.0'
