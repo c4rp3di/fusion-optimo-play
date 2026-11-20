@@ -22,22 +22,56 @@ class MegaException(val codigo: Int, mensaje: String) : Exception(mensaje) {
     }
 }
 
+/** Lo que vuelca una lectura abierta con [MegaFuente.abrir]. Se cierra con [close] (también si no se llegó a volcar). */
+interface MegaLectura : java.io.Closeable {
+    /** Escribe en [sal] los bytes pedidos, ya descifrados. Con [cancelado] se corta lanzando IOException. */
+    fun volcar(sal: java.io.OutputStream, cancelado: () -> Boolean = { false })
+}
+
+/**
+ * Algo que se puede leer por rangos de bytes y servir a libVLC o a la tele: un archivo de Mega ([MegaNodo]) o un vídeo que
+ * está guardado sin comprimir dentro de un RAR repartido en varias partes ([MegaVirtual]).
+ */
+interface MegaFuente {
+    val handle: String
+    val nombre: String
+    val tam: Long
+
+    /** Conecta con Mega para leer [ini, fin] (ambos incluidos). Si falla lo hace aquí, antes de volcar nada. */
+    fun abrir(cli: MegaCliente, ini: Long, fin: Long): MegaLectura
+}
+
 /** Un archivo de Mega listo para descifrar: [clave] son los 32 bytes de la clave del archivo (tal cual en el enlace). */
 class MegaNodo(
-    val handle: String,
-    val nombre: String,
-    val tam: Long,
+    override val handle: String,
+    override val nombre: String,
+    override val tam: Long,
     val clave: ByteArray,
     /** Carpetas por las que se llega (sin la carpeta raíz del enlace), p. ej. «Temporada 1/Extras». */
     val ruta: String = "",
     /** Identificadores de todas las carpetas que lo contienen (para limitar a una subcarpeta). */
     val padres: Set<String> = emptySet()
-) {
+) : MegaFuente {
     /** Clave AES-128 del contenido: las dos mitades de la clave, con XOR. */
     val aes: ByteArray = MegaCripto.plegar(clave)
 
     /** Los 8 bytes del contador inicial de AES-CTR. */
     val nonce: ByteArray = if (clave.size >= 24) clave.copyOfRange(16, 24) else ByteArray(8)
+
+    override fun abrir(cli: MegaCliente, ini: Long, fin: Long): MegaLectura {
+        val bloque = ini and 15L.inv()
+        val con = MegaFlujo.conectar(cli, this, bloque, fin)
+        val nodo = this
+        return object : MegaLectura {
+            override fun volcar(sal: java.io.OutputStream, cancelado: () -> Boolean) {
+                MegaFlujo.descifrar(con.inputStream, nodo, ini, bloque, fin, sal, cancelado)
+            }
+
+            override fun close() {
+                try { con.disconnect() } catch (e: Exception) { /* nada */ }
+            }
+        }
+    }
 }
 
 class MegaCarpeta(val nombre: String, val archivos: List<MegaNodo>)
