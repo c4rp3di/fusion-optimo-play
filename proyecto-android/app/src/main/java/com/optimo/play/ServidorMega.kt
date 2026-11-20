@@ -2,7 +2,6 @@ package com.optimo.play
 
 import android.net.Uri
 import java.io.BufferedOutputStream
-import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -33,7 +32,7 @@ class ServidorMega(
     private var ss: ServerSocket? = null
     private val pool = Executors.newCachedThreadPool()
     private val token = UUID.randomUUID().toString().replace("-", "").take(12)
-    private val nodos = ConcurrentHashMap<String, MegaNodo>()
+    private val nodos = ConcurrentHashMap<String, MegaFuente>()
     @Volatile private var activo = false
     /** Tipo MIME que se anuncia para los MKV: las teles DLNA (Samsung) esperan «video/x-mkv»; Chromecast, «video/x-matroska». */
     @Volatile var mimeMkv: String = "video/x-matroska"
@@ -66,16 +65,16 @@ class ServidorMega(
     }
 
     /** Registra el archivo y devuelve la dirección local con la que se reproduce. */
-    fun url(n: MegaNodo): String {
+    fun url(n: MegaFuente): String {
         nodos[n.handle] = n
         return "http://127.0.0.1:${iniciar()}/$token/${n.handle}/${Uri.encode(n.nombre)}"
     }
 
     /** Archivo que se registró con [url] (el identificador es el segundo tramo de la ruta local). */
-    fun nodo(handle: String): MegaNodo? = nodos[handle]
+    fun nodo(handle: String): MegaFuente? = nodos[handle]
 
     /** Registra el archivo y devuelve la dirección en la red local ([ip] del móvil) para la tele. Solo con lan = true. */
-    fun urlLan(n: MegaNodo, ip: String): String {
+    fun urlLan(n: MegaFuente, ip: String): String {
         nodos[n.handle] = n
         return "http://$ip:${iniciar()}/$token/${n.handle}/${Uri.encode(n.nombre)}"
     }
@@ -100,7 +99,7 @@ class ServidorMega(
     }
 
     private fun atender(c: Socket) {
-        var con: HttpURLConnection? = null
+        var lec: MegaLectura? = null
         var info = ""
         var corte = ""
         var cnt: Contador? = null
@@ -185,9 +184,8 @@ class ServidorMega(
                 return
             }
             // Primero se conecta con Mega: si falla, se responde con error en vez de dejar a libVLC con una cabecera vacía.
-            val bloque = ini and 15L.inv()
-            val conexion: HttpURLConnection = try {
-                conectar(n, bloque, fin)
+            val lectura: MegaLectura = try {
+                n.abrir(cli, ini, fin)
             } catch (e: MegaException) {
                 alError(e.message ?: "Error de Mega")
                 responder(c, if (e.codigo == MegaException.CUOTA) 503 else 502, "Bad Gateway")
@@ -197,9 +195,10 @@ class ServidorMega(
                 responder(c, 502, "Bad Gateway")
                 return
             }
-            con = conexion
+            lec = lectura
             sal.write(cab.toString().toByteArray(Charsets.ISO_8859_1))
-            enviar(sal, conexion, n, ini, bloque, fin)
+            lectura.volcar(sal)
+            sal.flush()
         } catch (e: Exception) {
             // Lo normal: libVLC cierra la conexión al saltar de posición.
             corte = e.javaClass.simpleName + ": " + (e.message ?: "")
@@ -207,14 +206,8 @@ class ServidorMega(
             if (lan && info.isNotEmpty()) {
                 RegistroEmision.anotar(info + " → enviados " + (cnt?.total ?: 0L) + " B" + (if (corte.isNotEmpty()) " · cortado (" + corte + ")" else ""))
             }
-            try { con?.disconnect() } catch (e: Exception) { /* nada */ }
+            try { lec?.close() } catch (e: Exception) { /* nada */ }
             try { c.close() } catch (e: Exception) { /* nada */ }
         }
-    }
-
-    private fun conectar(n: MegaNodo, desde: Long, hasta: Long): HttpURLConnection = MegaFlujo.conectar(cli, n, desde, hasta)
-
-    private fun enviar(sal: BufferedOutputStream, con: HttpURLConnection, n: MegaNodo, ini: Long, bloque: Long, fin: Long) {
-        MegaFlujo.descifrar(con.inputStream, n, ini, bloque, fin, sal)
     }
 }
