@@ -103,6 +103,8 @@ object Descompresor {
     ) : IArchiveExtractCallback, ICryptoGetTextPassword {
 
         var salida: Exportar.Salida? = null
+        private var buffer: java.io.BufferedOutputStream? = null
+        @Volatile var nombreActual = ""
         private var rutaActual: String? = null
         private var itemActual: ItemArchivo? = null
         private var hecho = 0L
@@ -127,15 +129,20 @@ object Descompresor {
             } catch (e: IOException) {
                 throw SevenZipException(e.message ?: "No se puede crear $ruta")
             }
+            // Con búfer de 1 MB: escribir a trozos pequeños en Descargas (almacenamiento compartido) es muy lento.
+            val b = java.io.BufferedOutputStream(s.flujo, 1 shl 20)
             salida = s
+            buffer = b
             rutaActual = ruta
             itemActual = item
+            nombreActual = ruta.substringAfterLast('/')
+            RegistroMega.anotar("Extrayendo «" + ruta + "» (" + Utiles.tam(item.tam) + ")")
             return object : ISequentialOutStream {
                 override fun write(data: ByteArray?): Int {
                     if (data == null || data.isEmpty()) return 0
                     if (cancelado()) throw SevenZipException("Cancelado")
                     try {
-                        s.flujo.write(data)
+                        b.write(data)
                     } catch (e: IOException) {
                         throw SevenZipException(e.message ?: "Error al escribir en Descargas")
                     }
@@ -150,18 +157,23 @@ object Descompresor {
 
         override fun setOperationResult(extractOperationResult: ExtractOperationResult?) {
             val s = salida
+            val b = buffer
             val ruta = rutaActual
             val item = itemActual
             salida = null
+            buffer = null
             rutaActual = null
             itemActual = null
             if (s == null || ruta == null) return // se saltó (ya estaba guardado)
+            RegistroMega.anotar("Resultado de «" + ruta + "»: " + extractOperationResult)
             if (extractOperationResult == ExtractOperationResult.OK) {
                 try {
+                    b?.flush()
                     s.terminar()
                     ok.add(ruta)
                 } catch (e: Exception) {
                     s.abortar()
+                    RegistroMega.error("No se pudo terminar «" + ruta + "»", e)
                     fallos.add(ruta + ": " + (e.message ?: e.javaClass.simpleName))
                 }
             } else {
@@ -195,8 +207,9 @@ object Descompresor {
      */
     fun extraer(
         ctx: Context, dir: File, primero: File, tipo: MegaPaquete.Tipo, clave: String?, rutaBase: String,
-        cancelado: () -> Boolean, progreso: (Long, Long) -> Unit
+        cancelado: () -> Boolean, progreso: (Long, Long, String) -> Unit
     ): Extraido {
+        RegistroMega.anotar("Abriendo con 7-Zip: " + primero.name + " (" + tipo + ", " + (if (clave != null) "con" else "sin") + " contraseña)")
         val cb = AbrirCb(dir, clave)
         var arc: IInArchive? = null
         try {
@@ -208,6 +221,7 @@ object Descompresor {
             val abierto: IInArchive = try {
                 SevenZip.openInArchive(null, ins, cb)
             } catch (e: SevenZipException) {
+                RegistroMega.error("7-Zip no pudo abrir el archivo (pidió contraseña: " + cb.pidioClave + ")", e)
                 if (cancelado()) throw IOException("Cancelado")
                 if (cb.pidioClave) throw ClaveNecesaria(false)
                 val m = e.message ?: ""
@@ -226,6 +240,9 @@ object Descompresor {
                 val enc = abierto.getProperty(i, PropID.ENCRYPTED) == true
                 items.add(ItemArchivo(i, ruta, tam, enc))
             }
+            RegistroMega.anotar(
+                "Abierto: " + items.size + " archivo(s), " + Utiles.tam(items.sumOf { it.tam }) + ", cifrados: " + items.count { it.cifrado }
+            )
             if (items.isEmpty()) throw IOException("El archivo comprimido no contiene nada que extraer")
             if (clave == null && items.any { it.cifrado }) throw ClaveNecesaria(false)
 
@@ -237,16 +254,19 @@ object Descompresor {
                 destinos[item.idx] = partes.joinToString("/")
             }
             val total = items.sumOf { it.tam }
-            val cbx = ExtraerCb(ctx, items.associateBy { it.idx }, destinos, clave, cancelado) { h -> progreso(h, total) }
+            lateinit var cbx: ExtraerCb
+            cbx = ExtraerCb(ctx, items.associateBy { it.idx }, destinos, clave, cancelado) { h -> progreso(h, total, cbx.nombreActual) }
             try {
                 abierto.extract(items.map { it.idx }.sorted().toIntArray(), false, cbx)
             } catch (e: SevenZipException) {
                 cbx.salida?.abortar()
+                RegistroMega.error("Fallo al extraer", e)
                 if (cancelado()) throw IOException("Cancelado")
                 if (cbx.claveMala) throw ClaveNecesaria(true)
                 if (cbx.pidioClave) throw ClaveNecesaria(false)
                 throw IOException(e.message ?: "Error al extraer")
             }
+            RegistroMega.anotar("Extracción terminada: " + cbx.ok.size + " correctos, " + cbx.fallos.size + " con fallo")
             return Extraido(cbx.ok, cbx.fallos)
         } finally {
             try { arc?.close() } catch (e: Exception) { /* nada */ }
