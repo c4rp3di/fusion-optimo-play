@@ -359,3 +359,14 @@ Muchos enlaces de Mega traen el contenido comprimido y repartido en partes. Ahor
   - El RAR de licencia «unRAR» incluido en 7-Zip solo permite extraer (no es software libre): irrelevante para uso personal, a tener en cuenta si se distribuye.
 - **Validación:** `tools/prueba_rar5.py` construye volúmenes RAR5 sintéticos según la especificación (archivos partidos en varios volúmenes, con y sin bloque «RR», cifrado,
   método ≠ 0, cabeceras cifradas) y comprueba que el algoritmo de `RarAlmacenado` ubica cada trozo y que leer rangos aleatorios devuelve exactamente los bytes originales.
+
+## 0.9.2 — Arreglo: la lista de archivos comprimidos se reabría sola y no dejaba empezar la extracción
+
+- **Qué pasaba (0.9.1):** al elegir «Descargar y extraer» salía la confirmación, pero la lista de archivos comprimidos se **reabría encima** y la tapaba; cada vuelta
+  abría otra confirmación debajo. La extracción **nunca llegaba a empezar** (se veía en el logcat: ~20 diálogos en 43 s y la librería nativa de 7-Zip sin cargar).
+  Causa: las banderas «ya hay un diálogo abierto» se reponían en el `OnDismissListener`, que Android ejecuta *después* de abrir el diálogo siguiente.
+- **Arreglo:** ahora se recuerda **qué diálogo concreto está en pantalla** (`dlgPaquete`, `dlgClavePaquete`); la lista solo vuelve si de verdad no hay ninguno. `tools/sim_dialogos.py`
+  modela la secuencia (clic → diálogo nuevo → cierre asíncrono del anterior) y reproduce el fallo con la lógica vieja y su ausencia con la nueva.
+- **Diagnóstico (porque un fallo así no sale en logcat):** `RegistroMega.kt` anota cada paso (partes, motor 7-Zip, apertura, archivos, resultados) y los errores con su causa y traza.
+  Se ve en **⋮ › Registro de extracción** (con «Copiar») y en logcat con la etiqueta `OptimoMega`. Si una extracción falla, el motivo sale en un **diálogo** («No se pudo extraer» › «Ver registro»).
+- **Extracción:** la escritura a Descargas va con búfer de 1 MB (escribir a trozos pequeños en el almacenamiento compartido es muy lento) y la notificación/lista muestra el archivo que se está extrayendo.
