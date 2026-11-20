@@ -20,6 +20,7 @@ class MegaExtractor(
     private val ctx: Context,
     private val alCambio: () -> Unit,
     private val alAviso: (String) -> Unit,
+    private val alFallo: (String) -> Unit,
     private val alEmpezar: () -> Unit,
     private val alTerminar: () -> Unit
 ) {
@@ -74,6 +75,9 @@ class MegaExtractor(
             estado[p.id] = 0
             errores.remove(p.id)
             fase[p.id] = p.base + ": en cola"
+            RegistroMega.anotar(
+                "Paquete «" + p.base + "» (" + p.etiqueta + ", " + Utiles.tam(p.tam) + ") " + (if (clave != null) "con contraseña" else "sin contraseña")
+            )
             if (esperandoClave?.id == p.id) {
                 esperandoClave = null
                 avisoClave = null
@@ -192,7 +196,9 @@ class MegaExtractor(
         val cancelado = { g != gen || cancelarId == id }
         val dir = carpeta(id)
         try {
-            Descompresor.comprobarMotor()?.let { throw IOException(it) }
+            val motor = Descompresor.comprobarMotor()
+            RegistroMega.anotar("Motor 7-Zip: " + (motor ?: "listo"))
+            if (motor != null) throw IOException(motor)
             dir.mkdirs()
 
             // 1. Bajar las partes a la caché (reanudando lo que ya hubiera).
@@ -201,6 +207,7 @@ class MegaExtractor(
             for ((i, parte) in p.partes.withIndex()) {
                 val f = File(dir, p.nombreCache(parte))
                 val previo = hecho
+                RegistroMega.anotar("Parte " + (i + 1) + "/" + p.partes.size + ": " + parte.nombre + " (" + Utiles.tam(parte.tam) + ")")
                 bajarAFichero(t.cli, parte, f, cancelado) { acumulado ->
                     hecho = previo + acumulado
                     val pct = porcentaje(hecho, p.tam)
@@ -215,6 +222,7 @@ class MegaExtractor(
 
             // 2. Extraer directamente a Descargas.
             fase[id] = p.base + ": extrayendo…"
+            RegistroMega.anotar("Partes bajadas; extrayendo")
             avisarCambio(true)
             ultimoPct = -1
             val rutaBase = ArrayList<String>()
@@ -222,11 +230,11 @@ class MegaExtractor(
             for (s in p.ruta.split('/')) if (s.isNotEmpty()) rutaBase.add(MegaGuardado.limpiarNombre(s))
             val res = Descompresor.extraer(
                 ctx, dir, File(dir, p.nombreCache(p.partes[0])), p.tipo, t.clave, rutaBase.joinToString("/"), cancelado
-            ) { h, total ->
+            ) { h, total, nombre ->
                 val pct = porcentaje(h, total)
                 if (pct != ultimoPct) {
                     ultimoPct = pct
-                    fase[id] = p.base + ": extrayendo · " + pct + " %"
+                    fase[id] = p.base + ": extrayendo " + nombre + " · " + pct + " %"
                     avisarCambio()
                 }
             }
@@ -244,6 +252,7 @@ class MegaExtractor(
             }
             avisarCambio(true)
         } catch (e: ClaveNecesaria) {
+            RegistroMega.anotar("«" + p.base + "»: " + (if (e.incorrecta) "contraseña incorrecta" else "pide contraseña"))
             if (g == gen) {
                 estado[id] = 1
                 fase.remove(id)
@@ -254,6 +263,7 @@ class MegaExtractor(
         } catch (e: Throwable) {
             if (g != gen) return // se canceló todo: el estado ya está limpio
             if (cancelarId == id) {
+                RegistroMega.anotar("«" + p.base + "» cancelado")
                 limpiar(id)
                 borrarCache(id)
                 avisarCambio(true)
@@ -264,10 +274,11 @@ class MegaExtractor(
                 is InterruptedException -> "Cancelado"
                 else -> e.message ?: e.javaClass.simpleName
             } ?: "Error"
+            RegistroMega.error("No se pudo extraer «" + p.base + "»", e)
             estado[id] = -1
             errores[id] = m
             fase.remove(id)
-            alAviso("No se pudo extraer " + p.base + ": " + m)
+            alFallo("«" + p.base + "»: " + m)
             avisarCambio(true)
         }
     }
