@@ -2010,11 +2010,21 @@ class PlaybackService : Service() {
         this,
         { main.post { notificar() } },
         { m: String -> avisoUi = m },
+        { m: String -> falloPaquete = m },
         { main.post { tomarBloqueos() } },
         { main.post { alTerminarGuardadoMega() } }
     ).also {
         extractorObj = it
         Thread { MegaExtractor.limpiarCacheAntigua(this) }.start()
+    }
+
+    @Volatile private var falloPaquete: String? = null
+
+    /** Último fallo al extraer un paquete, para enseñarlo en un diálogo (se devuelve una sola vez). */
+    fun tomarFalloPaquete(): String? {
+        val f = falloPaquete
+        falloPaquete = null
+        return f
     }
 
     /** -2 sin tocar, 0 en cola o trabajando, 1 esperando contraseña, 2 extraído, -1 error. */
@@ -2091,6 +2101,7 @@ class PlaybackService : Service() {
         val gen = genMega
         necesitaElegirPaquete = false
         estado = "Leyendo el paquete…"
+        RegistroMega.anotar("Reproducir sin extraer «" + p.base + "»: leyendo cabeceras de " + p.partes.size + " parte(s)")
         val t = Thread {
             try {
                 val idx = indicesRar[p.id]
@@ -2114,6 +2125,7 @@ class PlaybackService : Service() {
             } catch (e: InterruptedException) {
                 // Cancelado por otra apertura.
             } catch (e: Exception) {
+                RegistroMega.error("Reproducir sin extraer «" + p.base + "»", e)
                 if (gen == genMega) {
                     val m = when (e) {
                         is RarNoIndexable, is MegaException -> e.message
