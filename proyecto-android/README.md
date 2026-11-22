@@ -397,3 +397,16 @@ Muchos enlaces de Mega traen el contenido comprimido y repartido en partes. Ahor
 - **Buscador global (0.9.3):** el menú de pulsación larga de un resultado ahora **añade o quita** de Favoritos y lo hace en los dos sitios que usa la app (la marca ★ y la lista «Favoritos»), para que la ★ del panel
   coincida con lo que hiciste desde la búsqueda.
 - **Sin verificar:** no se pudo probar en un móvil. Si tras esto la ★ del panel sigue sin responder en algún caso, la pulsación larga y la opción del menú ⋮ son alternativas independientes del panel.
+
+## 0.9.5 — Listas por URL que redirigen de http a https (abrían en VLC pero no aquí)
+
+- **El fallo:** un servidor de listas (p. ej. `http://…/regioflix.m3u?usuario=…&clave=…`) respondía con una **redirección de `http` a `https`**. Java (`HttpURLConnection`) **no sigue las redirecciones que cambian de protocolo**
+  aunque se le pida, así que la app recibía el aviso de redirección en lugar de la lista, no veía canales y se la pasaba a libVLC como si fuera un único vídeo (que no expande listas). VLC sí las sigue, por eso allí funcionaba.
+- **Arreglo:** `Red.abrir()` (en `ListaM3u.kt`) sigue las redirecciones **a mano** (301/302/303/307/308, también relativas y entre http↔https, hasta 8 saltos) y devuelve la conexión final. Se usa en: abrir una lista por URL,
+  **añadir una lista por URL** (`Biblioteca.descargar`), la **guía XMLTV**, los **logos** y los manifiestos HLS (`MaestroLimpio`).
+- **Servidores que solo atienden a VLC:** `Red.abrirLista()` reintenta con la identidad `VLC/3.0.20 LibVLC/3.0.20` si el servidor rechaza la de navegador (403/406).
+- **Listas grandes:** el máximo que se lee de una lista M3U sube de 6 a **16 MB** (`Red.MAX_LISTA`); las de IPTV/VOD completas lo superaban y se cortaban en silencio.
+- **Avisos:** si no se puede leer una lista, ahora sale el motivo («No se pudo leer como lista (…); se prueba a reproducirla directamente») en vez de fallar sin decir nada.
+- **Validación:** `tools/prueba_redireccion/` levanta un servidor http que redirige a un https con certificado propio (con una segunda redirección relativa) y ejecuta en Java real el comportamiento **anterior**
+  (código 301, «no es lista») y el **nuevo** (200, lista); también el reintento 403 → VLC. Además se comprobó con la URL real que responde `https://…` con tipo `audio/x-mpegurl`.
+- **Sin verificar:** no se pudo probar en un móvil con esa lista concreta. Si tras esto sigue sin abrir, el aviso de arriba dirá por qué (código HTTP o error de conexión/certificado).
