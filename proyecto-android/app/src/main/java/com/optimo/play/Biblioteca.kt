@@ -120,9 +120,9 @@ object Biblioteca {
 
     /** Descarga el texto de una lista y comprueba que lo parece. Bloquea: llamar en un hilo. */
     fun descargar(url: String): String {
-        val c = Red.conexion(url, null, null)
+        val c = Red.abrirLista(url, null, null)
         if (c.responseCode >= 400) throw java.io.IOException("El servidor respondió " + c.responseCode)
-        val datos = c.inputStream.use { Red.leerBytes(it, 6_000_000) }
+        val datos = c.inputStream.use { Red.leerBytes(it, Red.MAX_LISTA) }
         val t = ListaM3u.texto(datos)
         if (!t.contains("#EXTM3U", true) && !t.contains("#EXTINF", true) && !t.contains("://")) {
             throw java.io.IOException("Lo descargado no parece una lista M3U")
