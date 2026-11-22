@@ -72,7 +72,7 @@ class MaestroLimpio(
 
     private fun descargar(dir: String): Pair<String, String>? {
         return try {
-            val con = Red.conexion(dir, ua, referer)
+            val con = Red.abrir(dir, ua, referer)
             val cod = con.responseCode
             var res: Pair<String, String>? = null
             if (cod < 400) {
