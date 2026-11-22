@@ -104,8 +104,7 @@ class Guia(
             val f = File(dir, Integer.toHexString(url.hashCode()) + ".xml")
             if (!f.exists() || System.currentTimeMillis() - f.lastModified() > 6 * 3600_000L) {
                 val tmp = File(dir, f.name + ".tmp")
-                val c = Red.conexion(url, null, null)
-                c.readTimeout = 60_000
+                val c = Red.abrir(url, null, null, 10_000, 60_000)
                 if (c.responseCode >= 400) throw IOException("El servidor responde " + c.responseCode)
                 var total = 0L
                 c.inputStream.use { i ->
