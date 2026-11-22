@@ -290,13 +290,16 @@ class ListasActivity : Activity() {
         val et = ArrayList<String>()
         val ac = ArrayList<() -> Unit>()
         et.add("Reproducir"); ac.add { abrirCanal(h) }
-        if (!h.e.lista.esFavoritos) {
-            et.add("★ Añadir a Favoritos")
-            ac.add {
-                val appCtx = applicationContext
-                Thread { Biblioteca.marcarFavorito(appCtx, h.e.canal, true, h.e.urlGuia) }.start()
-                Toast.makeText(this, "Añadido a Favoritos", Toast.LENGTH_SHORT).show()
-            }
+        val ajustes = Ajustes(applicationContext)
+        val esFav = h.e.lista.esFavoritos || ajustes.favoritos.contains(h.e.canal.clave)
+        et.add(if (esFav) "☆ Quitar de Favoritos" else "★ Añadir a Favoritos")
+        ac.add {
+            val appCtx = applicationContext
+            // Se marca en los dos sitios que usa la app (la marca ★ de los ajustes y la lista «Favoritos»), como hace el panel de canales.
+            if (esFav) ajustes.quitarFavoritos(listOf(h.e.canal.clave)) else ajustes.agregarFavoritos(listOf(h.e.canal.clave))
+            Thread { Biblioteca.marcarFavorito(appCtx, h.e.canal, !esFav, h.e.urlGuia) }.start()
+            firmaIndice = "" // el contenido de «Favoritos» ha cambiado: se vuelve a leer en la próxima búsqueda
+            Toast.makeText(this, if (esFav) "Quitado de Favoritos" else "Añadido a Favoritos", Toast.LENGTH_SHORT).show()
         }
         et.add("Abrir la lista «" + h.e.lista.nombre + "» entera"); ac.add { abrir(h.e.lista) }
         AlertDialog.Builder(this).setTitle(h.e.canal.etiqueta).setItems(et.toTypedArray()) { _, i -> ac[i]() }.show()
