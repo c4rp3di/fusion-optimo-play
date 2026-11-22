@@ -649,17 +649,24 @@ class PlaybackService : Service() {
         Thread {
             var lista: ListaM3u? = null
             var local: String? = null
+            var fallo: String? = null
             try {
                 val txt = ListaM3u.leer(this, f)
-                if (txt != null) {
+                if (txt == null) {
+                    fallo = "el servidor no la ha dado"
+                } else {
                     if (ListaM3u.esLocal(txt)) local = txt else if (ListaM3u.esLista(txt)) lista = ListaM3u.parsear(txt)
                 }
             } catch (e: Exception) {
                 // Si no se puede leer aquí, se intenta con libVLC igualmente.
+                fallo = e.message ?: e.javaClass.simpleName
             }
             main.post {
                 if (fuente !== f) return@post // se abrió otra cosa mientras tanto
                 estado = ""
+                if (fallo != null && local == null && lista == null) {
+                    avisoUi = "No se pudo leer como lista (" + fallo + "); se prueba a reproducirla directamente"
+                }
                 val loc = local
                 if (loc != null) {
                     abrirListaLocal(f, loc)
