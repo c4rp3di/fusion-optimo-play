@@ -332,6 +332,8 @@ class PlayerActivity : Activity() {
                 .show()
             return
         }
+        // La misma lista ya abierta, pero otro canal (desde el buscador de «Mis listas»): se cambia de canal sin reabrirla.
+        if (p.canalUrl != null && s.fuente?.uri == p.uri && s.elegirCanalPorUrl(p.canalUrl)) return
         if (s.debeAbrir(p.uri)) s.abrir(p)
     }
 
@@ -438,7 +440,7 @@ class PlayerActivity : Activity() {
             clave = i.getStringExtra("password")?.takeIf { it.isNotEmpty() }
             if (clave == null && i.action == Intent.ACTION_SEND) clave = MegaEnlace.claveEnTexto(i.getStringExtra(Intent.EXTRA_TEXT))
         }
-        return Fuente(uri, titulo, i.getStringExtra("referer"), i.getStringExtra("user_agent"), clave)
+        return Fuente(uri, titulo, i.getStringExtra("referer"), i.getStringExtra("user_agent"), clave, i.getStringExtra("canal_url"))
     }
 
     // ---------------------------------------------------------------- interfaz
