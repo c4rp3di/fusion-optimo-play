@@ -28,6 +28,34 @@ class ListasActivity : Activity() {
     private lateinit var vacio: TextView
     private var listas: List<ListaGuardada> = emptyList()
 
+    // ---- buscador global de canales (entre todas las listas guardadas)
+    private lateinit var buscador: EditText
+    private lateinit var infoBusqueda: TextView
+    private lateinit var resultados: ListView
+    private lateinit var filaAnadir: LinearLayout
+    private lateinit var botonPropia: Button
+
+    /** Un canal de una lista guardada, con el texto ya normalizado (minúsculas y sin acentos) para buscarlo rápido. */
+    private class EntradaIndice(
+        val canal: Canal, val lista: ListaGuardada, val urlGuia: String?, val norm: String, val normNombre: String
+    )
+
+    /** Un resultado: el canal y los nombres de las demás listas donde también está (los repetidos se juntan en uno). */
+    private class Hallazgo(val e: EntradaIndice, val otras: ArrayList<String>)
+
+    @Volatile private var indice: List<EntradaIndice>? = null
+    @Volatile private var firmaIndice = ""
+    @Volatile private var indexando = false
+    private var hallazgos: List<Hallazgo> = emptyList()
+    private val manejador = android.os.Handler(android.os.Looper.getMainLooper())
+    private var busquedaPendiente: Runnable? = null
+    private val reAcentos = Regex("\\p{M}+")
+
+    private fun norm(t: String): String =
+        reAcentos.replace(java.text.Normalizer.normalize(t.lowercase(), java.text.Normalizer.Form.NFD), "")
+
+    private fun firmaDeListas(): String = listas.joinToString("|") { it.id + ":" + it.fecha + ":" + it.entradas }
+
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     override fun onCreate(b: Bundle?) {
@@ -43,7 +71,45 @@ class ListasActivity : Activity() {
         t.textSize = 24f
         raiz.addView(t)
 
+        buscador = EditText(this)
+        buscador.hint = "🔍 Buscar canales en todas mis listas"
+        buscador.setSingleLine(true)
+        buscador.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        buscador.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+        buscador.setOnEditorActionListener { v, _, _ ->
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.hideSoftInputFromWindow(v.windowToken, 0)
+            true
+        }
+        buscador.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(t: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(t: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: android.text.Editable?) {
+                busquedaPendiente?.let { manejador.removeCallbacks(it) }
+                val r = Runnable { buscar(buscador.text.toString()) }
+                busquedaPendiente = r
+                manejador.postDelayed(r, 250)
+            }
+        })
+        raiz.addView(buscador, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        infoBusqueda = TextView(this)
+        infoBusqueda.alpha = 0.7f
+        infoBusqueda.setPadding(0, dp(4), 0, dp(4))
+        infoBusqueda.visibility = android.view.View.GONE
+        raiz.addView(infoBusqueda)
+
+        resultados = ListView(this)
+        resultados.visibility = android.view.View.GONE
+        resultados.setOnItemClickListener { _, _, i, _ -> hallazgos.getOrNull(i)?.let { abrirCanal(it) } }
+        resultados.setOnItemLongClickListener { _, _, i, _ ->
+            hallazgos.getOrNull(i)?.let { menuCanal(it) }
+            true
+        }
+        raiz.addView(resultados, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
         val fila = LinearLayout(this)
+        filaAnadir = fila
         fila.orientation = LinearLayout.HORIZONTAL
         val bUrl = Button(this)
         bUrl.text = "＋ Desde una dirección"
@@ -56,6 +122,7 @@ class ListasActivity : Activity() {
         raiz.addView(fila)
 
         val bPropia = Button(this)
+        botonPropia = bPropia
         bPropia.text = "＋ Nueva lista propia"
         bPropia.setOnClickListener { nuevaPropia() }
         raiz.addView(bPropia, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -82,6 +149,7 @@ class ListasActivity : Activity() {
 
     private fun cargar() {
         listas = Biblioteca.todas(this)
+        if (firmaDeListas() != firmaIndice) indice = null
         vacio.text = if (listas.size <= 1 && listas.all { it.entradas == 0 })
             "Añade listas desde una dirección o un archivo .m3u/.m3u8, o crea una propia. Los canales que marques con ☆ aparecen en Favoritos; también puedes guardar la lista que estés viendo desde ⋮ › «Guardar esta lista en la app»."
         else "Toca una lista para reproducirla. Mantén pulsada para gestionar sus canales y categorías, moverla, renombrarla o borrarla."
@@ -109,6 +177,140 @@ class ListasActivity : Activity() {
                 return v
             }
         }
+    }
+
+    // ---------------------------------------------------------------- buscador global
+
+    private fun modoBusqueda(on: Boolean) {
+        val oculto = android.view.View.GONE
+        val visto = android.view.View.VISIBLE
+        filaAnadir.visibility = if (on) oculto else visto
+        botonPropia.visibility = if (on) oculto else visto
+        vacio.visibility = if (on) oculto else visto
+        lista.visibility = if (on) oculto else visto
+        infoBusqueda.visibility = if (on) visto else oculto
+        resultados.visibility = if (on) visto else oculto
+    }
+
+    /** Lee todas las listas guardadas (en segundo plano) y deja un índice de todos sus canales. */
+    private fun construirIndice(alTerminar: () -> Unit) {
+        if (indexando) return
+        indexando = true
+        val ls = listas
+        val firma = firmaDeListas()
+        Thread {
+            val salida = ArrayList<EntradaIndice>()
+            try {
+                for ((n, l) in ls.withIndex()) {
+                    runOnUiThread { if (!isFinishing) infoBusqueda.text = "Leyendo las listas… " + (n + 1) + "/" + ls.size }
+                    val c = try { Biblioteca.contenido(this, l.id) } catch (e: Exception) { continue }
+                    for (canal in c.canales) {
+                        val nn = norm(canal.nombre)
+                        salida.add(
+                            EntradaIndice(canal, l, c.urlGuia, nn + " " + norm(canal.grupo) + " " + canal.numero + " " + norm(canal.tvgId ?: ""), nn)
+                        )
+                    }
+                }
+                indice = salida
+                firmaIndice = firma
+            } finally {
+                indexando = false
+            }
+            runOnUiThread { if (!isFinishing) alTerminar() }
+        }.start()
+    }
+
+    private fun buscar(q: String) {
+        val texto = q.trim()
+        if (texto.isEmpty()) {
+            hallazgos = emptyList()
+            modoBusqueda(false)
+            return
+        }
+        modoBusqueda(true)
+        val idx = indice
+        if (idx == null) {
+            infoBusqueda.text = "Leyendo las listas…"
+            construirIndice { buscar(buscador.text.toString()) }
+            return
+        }
+        val terminos = norm(texto).split(' ').filter { it.isNotEmpty() }
+        if (terminos.isEmpty()) return
+        val mapa = LinkedHashMap<String, Hallazgo>()
+        for (e in idx) {
+            var coincide = true
+            for (t in terminos) if (!e.norm.contains(t)) {
+                coincide = false
+                break
+            }
+            if (!coincide) continue
+            val clave = e.normNombre + "|" + e.canal.url
+            val h = mapa[clave]
+            if (h == null) mapa[clave] = Hallazgo(e, ArrayList())
+            else if (h.e.lista.nombre != e.lista.nombre && !h.otras.contains(e.lista.nombre)) h.otras.add(e.lista.nombre)
+        }
+        // Primero los que empiezan por lo buscado, luego los que lo tienen en el nombre y al final los que solo lo tienen en la categoría.
+        val ordenados = mapa.values.sortedBy { h ->
+            val n = h.e.normNombre
+            if (n.startsWith(terminos[0])) 0 else if (terminos.all { n.contains(it) }) 1 else 2
+        }
+        hallazgos = ordenados.take(500)
+        infoBusqueda.text = when {
+            ordenados.isEmpty() -> "Sin resultados para «" + texto + "» en " + listas.size + " lista(s)"
+            ordenados.size > 500 -> "Mostrando 500 de " + ordenados.size + " canales: añade más palabras para afinar"
+            else -> ordenados.size.toString() + (if (ordenados.size == 1) " canal" else " canales") + " en " + listas.size + " lista(s)"
+        }
+        resultados.adapter = object : android.widget.BaseAdapter() {
+            override fun getCount(): Int = hallazgos.size
+            override fun getItem(position: Int): Any = hallazgos[position]
+            override fun getItemId(position: Int): Long = position.toLong()
+            override fun getView(position: Int, convertView: android.view.View?, parent: ViewGroup?): android.view.View {
+                val v = convertView ?: layoutInflater.inflate(android.R.layout.simple_list_item_2, parent, false)
+                val h = hallazgos[position]
+                v.findViewById<TextView>(android.R.id.text1).text = h.e.canal.etiqueta + (if (h.e.canal.drm) "  🔒" else "")
+                val donde = (if (h.e.lista.esFavoritos) "★ " else "") + h.e.lista.nombre +
+                    (if (h.otras.isNotEmpty()) "  (+" + h.otras.size + " más)" else "")
+                v.findViewById<TextView>(android.R.id.text2).text = h.e.canal.grupo + "  ·  " + donde
+                return v
+            }
+        }
+    }
+
+    /** Abre la lista donde está el canal y arranca directamente en él (⏮ ⏭ y el panel de canales siguen funcionando). */
+    private fun abrirCanal(h: Hallazgo) {
+        val i = Intent(this, PlayerActivity::class.java)
+        i.action = Intent.ACTION_VIEW
+        i.data = Uri.parse(Biblioteca.uriDe(h.e.lista.id))
+        i.putExtra("title", h.e.lista.nombre)
+        i.putExtra("canal_url", h.e.canal.url)
+        startActivity(i)
+    }
+
+    private fun menuCanal(h: Hallazgo) {
+        val et = ArrayList<String>()
+        val ac = ArrayList<() -> Unit>()
+        et.add("Reproducir"); ac.add { abrirCanal(h) }
+        if (!h.e.lista.esFavoritos) {
+            et.add("★ Añadir a Favoritos")
+            ac.add {
+                val appCtx = applicationContext
+                Thread { Biblioteca.marcarFavorito(appCtx, h.e.canal, true, h.e.urlGuia) }.start()
+                Toast.makeText(this, "Añadido a Favoritos", Toast.LENGTH_SHORT).show()
+            }
+        }
+        et.add("Abrir la lista «" + h.e.lista.nombre + "» entera"); ac.add { abrir(h.e.lista) }
+        AlertDialog.Builder(this).setTitle(h.e.canal.etiqueta).setItems(et.toTypedArray()) { _, i -> ac[i]() }.show()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        // Con una búsqueda en curso, «atrás» la borra y vuelve a la lista de listas.
+        if (buscador.text.isNotEmpty()) {
+            buscador.setText("")
+            return
+        }
+        @Suppress("DEPRECATION")
+        super.onBackPressed()
     }
 
     private fun abrir(l: ListaGuardada) {
@@ -148,6 +350,7 @@ class ListasActivity : Activity() {
     }
 
     private fun gestionar(l: ListaGuardada) {
+        firmaIndice = "" // el editor puede cambiar canales sin cambiar el recuento: se vuelve a indexar al volver
         val i = Intent(this, EditorListaActivity::class.java)
         i.putExtra("id", l.id)
         startActivity(i)
