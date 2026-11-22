@@ -14,7 +14,9 @@ data class Fuente(
     val referer: String? = null,
     val ua: String? = null,
     /** Contraseña de un enlace de Mega protegido (#P!…), si quien lo pasa ya la conoce. */
-    val clave: String? = null
+    val clave: String? = null,
+    /** Si la fuente es una lista de canales: dirección del canal con el que debe arrancar (el buscador de «Mis listas»). */
+    val canalUrl: String? = null
 )
 
 /**
