@@ -31,9 +31,7 @@ object Logos {
         synchronized(fallidos) { if (fallidos.contains(url)) return }
         pool.execute {
             try {
-                val c = Red.conexion(url, null, null)
-                c.connectTimeout = 6000
-                c.readTimeout = 8000
+                val c = Red.abrir(url, null, null, 6000, 8000)
                 val datos = c.inputStream.use { Red.leerBytes(it, 1_500_000) }
                 val o = BitmapFactory.Options()
                 o.inJustDecodeBounds = true
