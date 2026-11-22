@@ -109,7 +109,15 @@ class PanelCanales(
             val raiz = LinearLayout(act)
             raiz.orientation = LinearLayout.HORIZONTAL
             raiz.gravity = Gravity.CENTER_VERTICAL
-            raiz.setPadding(px(8), px(4), px(0), px(4))
+            // Margen a la derecha: en las listas largas el desplazador rápido de Android se queda con los toques de ese borde
+            // (aunque no se vea), así que ahí no puede haber nada que pulsar. Por eso la ★ va a la izquierda.
+            raiz.setPadding(px(0), px(4), px(28), px(4))
+            val estrella = texto("☆", 22f)
+            estrella.setTextColor(0xFFFFC107.toInt())
+            estrella.gravity = Gravity.CENTER
+            estrella.minWidth = px(48)
+            estrella.minHeight = px(48)
+            raiz.addView(estrella)
             val logo = ImageView(act)
             logo.scaleType = ImageView.ScaleType.FIT_CENTER
             raiz.addView(logo, LinearLayout.LayoutParams(px(64), px(28)))
@@ -127,12 +135,6 @@ class PanelCanales(
             val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             lp.leftMargin = px(8)
             raiz.addView(col, lp)
-            val estrella = texto("☆", 20f)
-            estrella.setTextColor(0xFFFFC107.toInt())
-            estrella.gravity = Gravity.CENTER
-            estrella.minWidth = px(44)
-            estrella.minHeight = px(44)
-            raiz.addView(estrella)
             val f = Fila(raiz, logo, nombre, prog, estrella)
             raiz.tag = f
             return f
@@ -181,6 +183,16 @@ class PanelCanales(
         lista.adapter = adaptador
         lista.divider = null
         lista.isFastScrollEnabled = true
+        // Pulsación larga sobre un canal: alterna su ★ (otra forma de marcar favoritos, lejos del desplazador).
+        lista.setOnItemLongClickListener { _, _, pos, _ ->
+            val c = if (pos in items.indices) items[pos].canal else null
+            if (c != null) {
+                alFavorito(c)
+                true
+            } else {
+                false
+            }
+        }
         lista.setOnItemClickListener { _, _, pos, _ ->
             if (pos in items.indices) {
                 val it = items[pos]
