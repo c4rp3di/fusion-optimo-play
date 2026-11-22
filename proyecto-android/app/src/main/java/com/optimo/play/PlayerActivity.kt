@@ -2031,6 +2031,15 @@ class PlayerActivity : Activity() {
         val acciones = ArrayList<() -> Unit>()
         etiquetas.add("Información"); acciones.add { Informacion.mostrar(this, s) }
         if (s.hayCanales) {
+            val actualCanal = s.canales.getOrNull(s.canalActual)
+            if (actualCanal != null) {
+                val esFav = aj.favoritos.contains(actualCanal.clave)
+                etiquetas.add(if (esFav) "☆ Quitar de Favoritos: " + actualCanal.nombre else "★ Añadir a Favoritos: " + actualCanal.nombre)
+                acciones.add {
+                    alternarFavorito(actualCanal)
+                    aviso(if (esFav) "Quitado de Favoritos" else "Añadido a Favoritos")
+                }
+            }
             etiquetas.add("Canales"); acciones.add { abrirPanelCanales() }
             etiquetas.add("Programación de este canal"); acciones.add { dialogoProgramacion() }
             etiquetas.add("Guía de programación…"); acciones.add { dialogoGuia() }
