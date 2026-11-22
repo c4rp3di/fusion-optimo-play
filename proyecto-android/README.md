@@ -387,3 +387,13 @@ Muchos enlaces de Mega traen el contenido comprimido y repartido en partes. Ahor
   `tools/prueba_buscador.py` modela la búsqueda (normalización, varias palabras, duplicados, orden) con casos de prueba.
 - **Límites / sin verificar:** no se pudo compilar ni probar en un móvil. Todo el índice vive en memoria mientras la pantalla está abierta (con decenas de miles de canales son unos pocos MB). Los canales
   se enlazan por su dirección: si una lista se actualiza y cambia la dirección de un canal, un resultado ya visto dejaría de coincidir (basta con volver a buscar).
+
+## 0.9.4 — Favoritos: ★ accesible en las listas largas y en el menú del canal
+
+- **El fallo:** en el panel de canales la ★ estaba en el **borde derecho** de cada fila. En las listas largas Android activa el **desplazador rápido** (`isFastScrollEnabled`), que se queda con los
+  toques de ese borde aunque no se vea, así que pulsar la ★ no marcaba nada.
+- **Arreglo en el panel (☰):** la ★ pasa al **lado izquierdo** de cada fila, y a la derecha queda un margen libre. Además, **pulsación larga sobre un canal alterna su ★** (otra forma de marcar, lejos del desplazador).
+- **Menú ⋮ del reproductor:** con una lista de canales abierta aparece **★ Añadir a Favoritos: <canal>** (o **☆ Quitar de Favoritos: <canal>**) para el canal que está sonando, sin abrir el panel.
+- **Buscador global (0.9.3):** el menú de pulsación larga de un resultado ahora **añade o quita** de Favoritos y lo hace en los dos sitios que usa la app (la marca ★ y la lista «Favoritos»), para que la ★ del panel
+  coincida con lo que hiciste desde la búsqueda.
+- **Sin verificar:** no se pudo probar en un móvil. Si tras esto la ★ del panel sigue sin responder en algún caso, la pulsación larga y la opción del menú ⋮ son alternativas independientes del panel.
