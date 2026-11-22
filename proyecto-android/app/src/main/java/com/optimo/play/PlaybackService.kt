@@ -670,9 +670,16 @@ class PlaybackService : Service() {
                     canales = l.canales
                     urlGuiaCabecera = l.urlGuia
                     titulo = f.titulo
-                    necesitaElegirCanal = true
-                    estado = "Elige un canal (" + l.canales.size + ")"
-                    iniciarGuia(f)
+                    // Si se abre desde el buscador de «Mis listas», arranca directamente en ese canal.
+                    val inicial = f.canalUrl?.let { u -> l.canales.indexOfFirst { it.url == u } } ?: -1
+                    if (inicial >= 0) {
+                        iniciarGuia(f)
+                        elegirCanal(inicial)
+                    } else {
+                        necesitaElegirCanal = true
+                        estado = "Elige un canal (" + l.canales.size + ")"
+                        iniciarGuia(f)
+                    }
                 } else {
                     reproducir(f.uri, f)
                 }
@@ -770,6 +777,14 @@ class PlaybackService : Service() {
         tituloCola = f.titulo
         ponerPista(0)
         if (pistas.size < total) avisoUi = (total - pistas.size).toString() + " de " + total + " archivos de la lista no se encontraron"
+    }
+
+    /** Pone el canal de la lista abierta que tenga esa dirección. false si esta lista no lo trae. */
+    fun elegirCanalPorUrl(url: String): Boolean {
+        val i = canales.indexOfFirst { it.url == url }
+        if (i < 0) return false
+        elegirCanal(i)
+        return true
     }
 
     /** Pone el canal número [i] de la lista (índice dentro de [canales]). */
