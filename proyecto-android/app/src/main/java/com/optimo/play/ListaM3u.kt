@@ -227,13 +227,13 @@ class ListaM3u(val canales: List<Canal>, val urlGuia: String?) {
             if (f.uri.startsWith(Biblioteca.PREFIJO, true)) return Biblioteca.leer(ctx, f.uri.substring(Biblioteca.PREFIJO.length))
             val u = Uri.parse(f.uri)
             val ins: InputStream = if (u.scheme == "http" || u.scheme == "https") {
-                val c = Red.conexion(f.uri, f.ua, f.referer)
+                val c = Red.abrirLista(f.uri, f.ua, f.referer)
                 if (c.responseCode >= 400) return null
                 c.inputStream
             } else {
                 ctx.contentResolver.openInputStream(u) ?: return null
             }
-            val datos = ins.use { Red.leerBytes(it, 6_000_000) }
+            val datos = ins.use { Red.leerBytes(it, Red.MAX_LISTA) }
             return texto(datos)
         }
 
@@ -253,6 +253,47 @@ class ListaM3u(val canales: List<Canal>, val urlGuia: String?) {
 
 /** Utilidades de red sencillas (listas, guías y logos). */
 object Red {
+
+    /** Identidad de VLC: algunos servidores de listas solo responden a ella (y no a un navegador). */
+    const val UA_VLC = "VLC/3.0.20 LibVLC/3.0.20"
+
+    /** Tamaño máximo de una lista M3U que se lee (las de VOD/IPTV completas pasan de 6 MB). */
+    const val MAX_LISTA = 16_000_000
+
+    /**
+     * Abre la dirección siguiendo las redirecciones a mano y devuelve la conexión final, ya conectada (con el código de respuesta leído).
+     * HttpURLConnection **no sigue las que cambian de http a https** (ni al revés) aunque se le pida: muchos servidores de listas IPTV
+     * redirigen así, y VLC sí las sigue, por eso una lista que abría en VLC no abría aquí.
+     */
+    fun abrir(url: String, ua: String?, referer: String?, tConexion: Int = 10_000, tLectura: Int = 20_000): HttpURLConnection {
+        var actual = url
+        var saltos = 0
+        while (true) {
+            val c = conexion(actual, ua, referer)
+            c.connectTimeout = tConexion
+            c.readTimeout = tLectura
+            c.instanceFollowRedirects = false
+            val cod = c.responseCode
+            if (cod == 301 || cod == 302 || cod == 303 || cod == 307 || cod == 308) {
+                val destino = c.getHeaderField("Location")
+                try { c.disconnect() } catch (e: Exception) { /* nada */ }
+                if (destino.isNullOrBlank() || ++saltos > 8) throw java.io.IOException("Demasiadas redirecciones o sin destino")
+                actual = URL(URL(actual), destino.trim()).toString()
+                continue
+            }
+            return c
+        }
+    }
+
+    /** Como [abrir], y si el servidor rechaza la identidad de navegador (403/406) lo vuelve a intentar como VLC. */
+    fun abrirLista(url: String, ua: String?, referer: String?): HttpURLConnection {
+        val c = abrir(url, ua, referer)
+        if ((c.responseCode == 403 || c.responseCode == 406) && ua.isNullOrBlank()) {
+            try { c.disconnect() } catch (e: Exception) { /* nada */ }
+            return abrir(url, UA_VLC, referer)
+        }
+        return c
+    }
 
     fun conexion(url: String, ua: String?, referer: String?): HttpURLConnection {
         val c = URL(url).openConnection() as HttpURLConnection
