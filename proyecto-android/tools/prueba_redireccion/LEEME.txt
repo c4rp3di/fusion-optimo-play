@@ -1,0 +1,7 @@
+Prueba real (JDK 21) del fallo «la lista abre en VLC pero no en Optimo Play»:
+HttpURLConnection no sigue las redirecciones que cambian de http a https; Red.abrir() (ListaM3u.kt) las sigue a mano.
+
+  cd tools/prueba_redireccion
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout k.pem -out c.pem -days 1 -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1"
+  python3 servidores.py &        # http://127.0.0.1:8080 (redirige a https) y https://127.0.0.1:8443 (redirección relativa y lista)
+  java Prueba.java               # muestra ANTES (código 301, no es lista) y AHORA (200, es lista) y el reintento 403 -> VLC
