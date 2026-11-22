@@ -370,3 +370,20 @@ Muchos enlaces de Mega traen el contenido comprimido y repartido en partes. Ahor
 - **Diagnóstico (porque un fallo así no sale en logcat):** `RegistroMega.kt` anota cada paso (partes, motor 7-Zip, apertura, archivos, resultados) y los errores con su causa y traza.
   Se ve en **⋮ › Registro de extracción** (con «Copiar») y en logcat con la etiqueta `OptimoMega`. Si una extracción falla, el motivo sale en un **diálogo** («No se pudo extraer» › «Ver registro»).
 - **Extracción:** la escritura a Descargas va con búfer de 1 MB (escribir a trozos pequeños en el almacenamiento compartido es muy lento) y la notificación/lista muestra el archivo que se está extrayendo.
+
+## 0.9.3 — Buscador global de canales en «Mis listas»
+
+- **Dónde:** el campo **🔍 Buscar canales en todas mis listas** está arriba de *Mis listas*. Al escribir, la pantalla pasa a mostrar los canales que coinciden de **todas** las listas
+  guardadas (Favoritos, las propias y las descargadas o importadas); borrar el texto (o «atrás») vuelve a la lista de listas.
+- **Cómo busca:** sin distinguir mayúsculas ni acentos («andalucia» encuentra «Andalucía»), con **varias palabras en cualquier orden** (todas deben aparecer) y mirando el **nombre, la
+  categoría, el número de canal y el `tvg-id`**. Primero salen los que *empiezan* por lo buscado, luego los que lo llevan en el nombre y al final los que solo lo llevan en la categoría. Máximo 500
+  resultados (si hay más lo dice, para afinar con más palabras).
+- **Sin repetidos:** el mismo canal (mismo nombre y dirección) que esté en varias listas —típico de Favoritos— sale **una sola vez**, con «(+N más)» indicando en cuántas listas más está.
+- **Al tocar un canal:** se abre su lista y **arranca directamente en ese canal**, así que ⏮ ⏭, el panel de canales (☰), la guía y los favoritos funcionan como siempre dentro de esa lista. Si esa misma lista
+  ya está abierta en el reproductor, solo cambia de canal. **Pulsación larga:** Reproducir · ★ Añadir a Favoritos · Abrir la lista entera.
+- **Rendimiento:** la primera búsqueda lee y descifra todas las listas en segundo plano («Leyendo las listas… 3/12») y deja un índice en memoria; las siguientes son instantáneas. El índice se rehace solo
+  si cambian las listas (se añade, borra o actualiza una, o se vuelve del editor de canales).
+- **Piezas:** `ListasActivity` (índice + búsqueda + resultados), `Fuente.canalUrl` y `PlaybackService.elegirCanalPorUrl` (arrancar en un canal concreto), extra `canal_url` del `Intent` del reproductor.
+  `tools/prueba_buscador.py` modela la búsqueda (normalización, varias palabras, duplicados, orden) con casos de prueba.
+- **Límites / sin verificar:** no se pudo compilar ni probar en un móvil. Todo el índice vive en memoria mientras la pantalla está abierta (con decenas de miles de canales son unos pocos MB). Los canales
+  se enlazan por su dirección: si una lista se actualiza y cambia la dirección de un canal, un resultado ya visto dejaría de coincidir (basta con volver a buscar).
